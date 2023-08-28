@@ -2,6 +2,7 @@ name: main CI
 on:
   push:
     branches: [ main ]
+  pull_request:
 jobs:
   build:
     # see https://docs.docker.com/ci-cd/github-actions/
