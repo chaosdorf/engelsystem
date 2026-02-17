@@ -20,7 +20,6 @@ use Symfony\Component\Mailer\Transport\TransportInterface;
 
 class MailerServiceProviderTest extends ServiceProviderTest
 {
-    /** @var array */
     protected array $defaultConfig = [
         'app_name' => 'Engelsystem App',
         'email'    => [
@@ -33,7 +32,6 @@ class MailerServiceProviderTest extends ServiceProviderTest
         ],
     ];
 
-    /** @var array */
     protected array $smtpConfig = [
         'email' => [
             'driver'     => 'smtp',
@@ -46,14 +44,14 @@ class MailerServiceProviderTest extends ServiceProviderTest
     ];
 
     /**
-     * @covers \Engelsystem\Mail\MailerServiceProvider::register
+     * @covers \Engelsystem\Mail\MailerServiceProvider::boot
      */
-    public function testRegister(): void
+    public function testBoot(): void
     {
         $app = $this->getApplication();
 
         $serviceProvider = new MailerServiceProvider($app);
-        $serviceProvider->register();
+        $serviceProvider->boot();
 
         $this->assertExistsInContainer(['mailer.transport', TransportInterface::class], $app);
         $this->assertExistsInContainer(['mailer.symfony', SymfonyMailer::class], $app);
@@ -92,7 +90,7 @@ class MailerServiceProviderTest extends ServiceProviderTest
         $app = $this->getApplication($emailConfig);
 
         $serviceProvider = new MailerServiceProvider($app);
-        $serviceProvider->register();
+        $serviceProvider->boot();
 
         $transport = $app->get('mailer.transport');
         $this->assertInstanceOf($class, $transport);
@@ -107,7 +105,7 @@ class MailerServiceProviderTest extends ServiceProviderTest
         $this->expectException(InvalidArgumentException::class);
 
         $serviceProvider = new MailerServiceProvider($app);
-        $serviceProvider->register();
+        $serviceProvider->boot();
     }
 
     /**
@@ -118,7 +116,7 @@ class MailerServiceProviderTest extends ServiceProviderTest
         $app = $this->getApplication($this->smtpConfig);
 
         $serviceProvider = new MailerServiceProvider($app);
-        $serviceProvider->register();
+        $serviceProvider->boot();
 
         /** @var EsmtpTransport $transport */
         $transport = $app->get('mailer.transport');

@@ -44,7 +44,7 @@ class Logger extends AbstractLogger
             $message .= $this->formatException($context['exception']);
         }
 
-        $this->log->create(['level' => $level, 'message' => $message]);
+        $this->createEntry(['level' => $level, 'message' => $message]);
     }
 
     /**
@@ -68,7 +68,8 @@ class Logger extends AbstractLogger
     protected function formatException(Throwable $e): string
     {
         return sprintf(
-            implode(PHP_EOL, ['', 'Exception: %s', 'File: %s:%u', 'Code: %s', 'Trace:', '%s']),
+            implode(PHP_EOL, ['', '%s: %s', 'File: %s:%u', 'Code: %s', 'Trace:', '%s']),
+            get_class($e),
             $e->getMessage(),
             $e->getFile(),
             $e->getLine(),
@@ -80,5 +81,10 @@ class Logger extends AbstractLogger
     protected function checkLevel(string $level): bool
     {
         return in_array($level, $this->allowedLevels);
+    }
+
+    protected function createEntry(array $data): void
+    {
+        $this->log->create($data);
     }
 }

@@ -2,11 +2,14 @@
 {% import 'macros/base.twig' as m %}
 {% import 'macros/form.twig' as f %}
 
-{% block title %}{{ __(is_edit ? 'worklog.edit' : 'worklog.add') }}{% endblock %}
+{% block title %}{{ is_edit ? __('worklog.edit') : __('worklog.add') }}{% endblock %}
 
 {% block content %}
     <div class="container">
-        <h1>{{ block('title') }}</h1>
+        <h1>
+            {{ m.back(url('/users', {action: 'view', user_id: userdata.id})) }}
+            {{ block('title') }}
+        </h1>
 
         {% include 'layouts/parts/messages.twig' %}
 
@@ -14,13 +17,10 @@
             {{ csrf() }}
             <div class="row g-2">
                 <div class="col-12">
-                    {{ m.button(__('back'), url('/users', {action: 'view', user_id: user.id})) }}
-                </div>
-                <div class="col-12">
                     <div>
-                        <label class="form-label">{{ __('User') }}</label>
+                        <label class="form-label">{{ __('general.user') }}</label>
                     </div>
-                    {{ m.user(user, {'pronoun': true}) }}
+                    {{ m.user(userdata, {'pronoun': true}) }}
                 </div>
                 <div class="col-12">
                     {{ f.input('work_date', __('worklog.date'), {
@@ -35,12 +35,17 @@
                         'step': '0.01',
                         'min': 0,
                     }) }}
-                    {{ f.input('comment', __('worklog.comment'), {
-                        'value': comment,
+                    {{ f.input('description', __('worklog.description'), {
+                        'value': description,
                         'required': true,
                         'max_length': 200,
                     }) }}
-                    {{ f.submit(__('form.save')) }}
+                    {% if attribute(config('night_shifts'), 'enabled') %}
+                        {{ f.checkbox('night_shift', __('worklog.night_shift'), {
+                            'checked': night_shift,
+                        }) }}
+                    {% endif %}
+                    {{ f.submit(__('form.save'), {'icon_left': 'save'}) }}
                 </div>
             </div>
         </form>

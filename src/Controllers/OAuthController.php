@@ -13,6 +13,7 @@ use Engelsystem\Http\Request;
 use Engelsystem\Http\Response;
 use Engelsystem\Http\UrlGenerator;
 use Engelsystem\Models\OAuth;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use League\OAuth2\Client\Provider\AbstractProvider;
@@ -51,6 +52,7 @@ class OAuthController extends BaseController
             throw new HttpNotFound('oauth.' . $request->get('error'));
         }
 
+        // Initial request redirects to provider
         if (!$request->has('code')) {
             $authorizationUrl = $provider->getAuthorizationUrl(
                 [
@@ -64,6 +66,7 @@ class OAuthController extends BaseController
             return $this->redirect->to($authorizationUrl);
         }
 
+        // Redirected URL got called a second time
         if (
             !$this->session->get('oauth2_state')
             || $request->get('state') !== $this->session->get('oauth2_state')
@@ -75,6 +78,7 @@ class OAuthController extends BaseController
             throw new HttpNotFound('oauth.invalid-state');
         }
 
+        // Fetch access token
         $accessToken = null;
         try {
             $accessToken = $provider->getAccessToken(
@@ -87,6 +91,7 @@ class OAuthController extends BaseController
             $this->handleOAuthError($e, $providerName);
         }
 
+        // Load resource identifier
         $resourceOwner = null;
         try {
             $resourceOwner = $provider->getResourceOwner($accessToken);
@@ -95,6 +100,7 @@ class OAuthController extends BaseController
         }
         $resourceId = $this->getId($providerName, $resourceOwner);
 
+        // Fetch existing oauth state
         /** @var OAuth|null $oauth */
         $oauth = $this->oauth
             ->query()
@@ -105,8 +111,11 @@ class OAuthController extends BaseController
             ->where('identifier', '===', (string) $resourceId)
             ->first();
 
+        // Update oauth state
         $expirationTime = $accessToken->getExpires();
-        $expirationTime = $expirationTime ? Carbon::createFromTimestamp($expirationTime) : null;
+        $expirationTime = $expirationTime
+            ? Carbon::createFromTimestamp($expirationTime, Carbon::now()->timezone)
+            : null;
         if ($oauth) {
             $oauth->access_token = $accessToken->getToken();
             $oauth->refresh_token = $accessToken->getRefreshToken();
@@ -115,6 +124,7 @@ class OAuthController extends BaseController
             $oauth->save();
         }
 
+        // Load user
         $user = $this->auth->user();
         if ($oauth && $user && $user->id != $oauth->user_id) {
             throw new HttpNotFound('oauth.already-connected');
@@ -122,6 +132,7 @@ class OAuthController extends BaseController
 
         $connectProvider = $this->session->get('oauth2_connect_provider');
         $this->session->remove('oauth2_connect_provider');
+        // Connect user with oauth
         if (!$oauth && $user && $connectProvider && $connectProvider == $providerName) {
             $oauth = new OAuth([
                 'provider'      => $providerName,
@@ -130,9 +141,20 @@ class OAuthController extends BaseController
                 'refresh_token' => $accessToken->getRefreshToken(),
                 'expires_at'    => $expirationTime,
             ]);
-            $oauth->user()
-                ->associate($user)
-                ->save();
+
+            try {
+                $oauth->user()
+                    ->associate($user)
+                    ->save();
+            // @codeCoverageIgnoreStart
+            } catch (UniqueConstraintViolationException) {
+                $this->log->error(
+                    'Duplicate OAuth user {user} using {provider}: Database does not support unique with mixed case! ',
+                    ['provider' => $providerName, 'user' => $resourceId]
+                );
+                throw new HttpNotFound('oauth.provider-error');
+                // @codeCoverageIgnoreEnd
+            }
 
             $this->log->info(
                 'Connected OAuth user {user} using {provider}',
@@ -141,6 +163,7 @@ class OAuthController extends BaseController
             $this->addNotification('oauth.connected');
         }
 
+        // Load user data
         $resourceData = $resourceOwner->toArray();
         if (!empty($config['nested_info'])) {
             $resourceData = Arr::dot($resourceData);
@@ -148,6 +171,7 @@ class OAuthController extends BaseController
 
         $userdata = new Collection($resourceData);
         if (!$oauth) {
+            // User authenticated but has no account
             return $this->redirectRegister(
                 $providerName,
                 (string) $resourceId,
@@ -181,6 +205,12 @@ class OAuthController extends BaseController
     public function disconnect(Request $request): Response
     {
         $providerName = $request->getAttribute('provider');
+
+        $this->requireProvider($providerName);
+
+        if (!($this->config->get('oauth')[$providerName]['allow_user_disconnect'] ?? true)) {
+            throw new HttpNotFound();
+        }
 
         $this->oauth
             ->whereUserId($this->auth->user()->id)
@@ -248,7 +278,6 @@ class OAuthController extends BaseController
             return;
         }
 
-        $userState->arrived = true;
         $userState->arrival_date = new Carbon();
         $userState->save();
 
@@ -307,21 +336,20 @@ class OAuthController extends BaseController
             throw new HttpNotFound('oauth.not-found');
         }
 
-        $this->session->set(
-            'form_data',
-            [
-                'name'       => $userdata->get($config['username']),
-                'email'      => $userdata->get($config['email']),
-                'first_name' => $userdata->get($config['first_name']),
-                'last_name'  => $userdata->get($config['last_name']),
-            ],
-        );
+        // Set registration form field data
+        $this->session->set('form-data-username', $userdata->get($config['username']));
+        $this->session->set('form-data-email', $userdata->get($config['email']));
+        $this->session->set('form-data-firstname', $userdata->get($config['first_name']));
+        $this->session->set('form-data-lastname', $userdata->get($config['last_name']));
+
+        // Define OAuth state
         $this->session->set('oauth2_groups', $userdata->get($config['groups'], []));
         $this->session->set('oauth2_connect_provider', $providerName);
         $this->session->set('oauth2_user_id', $providerUserIdentifier);
 
+        $timezone = Carbon::now()->timezone;
         $expirationTime = $accessToken->getExpires();
-        $expirationTime = $expirationTime ? Carbon::createFromTimestamp($expirationTime) : null;
+        $expirationTime = $expirationTime ? Carbon::createFromTimestamp($expirationTime, $timezone) : null;
         $this->session->set('oauth2_access_token', $accessToken->getToken());
         $this->session->set('oauth2_refresh_token', $accessToken->getRefreshToken());
         $this->session->set('oauth2_expires_at', $expirationTime);

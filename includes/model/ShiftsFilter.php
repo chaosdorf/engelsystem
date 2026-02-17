@@ -44,11 +44,16 @@ class ShiftsFilter
      * ShiftsFilter constructor.
      *
      * @param bool  $user_shifts_admin
-     * @param int[] $rooms
+     * @param int[] $locations
      * @param int[] $angelTypes
+     * @param ?int $tag
      */
-    public function __construct($user_shifts_admin = false, private $rooms = [], $angelTypes = [])
-    {
+    public function __construct(
+        $user_shifts_admin = false,
+        private $locations = [],
+        $angelTypes = [],
+        private $tag = null
+    ) {
         $this->types = $angelTypes;
 
         $this->filled = [
@@ -68,10 +73,11 @@ class ShiftsFilter
         return [
             'userShiftsAdmin' => $this->userShiftsAdmin,
             'filled'          => $this->filled,
-            'rooms'           => $this->rooms,
+            'locations'       => $this->locations,
             'types'           => $this->types,
             'startTime'       => $this->startTime,
             'endTime'         => $this->endTime,
+            'tag'             => $this->tag,
         ];
     }
 
@@ -80,12 +86,13 @@ class ShiftsFilter
      */
     public function sessionImport($data)
     {
-        $this->userShiftsAdmin = $data['userShiftsAdmin'];
-        $this->filled = $data['filled'];
-        $this->rooms = $data['rooms'];
-        $this->types = $data['types'];
-        $this->startTime = $data['startTime'];
-        $this->endTime = $data['endTime'];
+        $this->userShiftsAdmin = $data['userShiftsAdmin'] ?? false;
+        $this->filled = $data['filled'] ?? [];
+        $this->locations = $data['locations'] ?? [];
+        $this->types = $data['types'] ?? [];
+        $this->startTime = $data['startTime'] ?? null;
+        $this->endTime = $data['endTime'] ?? null;
+        $this->tag = $data['tag'] ?? null;
     }
 
     /**
@@ -93,7 +100,7 @@ class ShiftsFilter
      */
     public function getStart()
     {
-        return Carbon::createFromTimestamp($this->startTime);
+        return Carbon::createFromTimestamp($this->startTime, Carbon::now()->timezone);
     }
 
     /**
@@ -117,7 +124,7 @@ class ShiftsFilter
      */
     public function getEnd()
     {
-        return Carbon::createFromTimestamp($this->endTime);
+        return Carbon::createFromTimestamp($this->endTime, Carbon::now()->timezone);
     }
 
     /**
@@ -139,6 +146,16 @@ class ShiftsFilter
         }
 
         $this->endTime = $endTime;
+    }
+
+    public function getTag(): ?int
+    {
+        return $this->tag;
+    }
+
+    public function setTag(?int $tag): void
+    {
+        $this->tag = $tag;
     }
 
     /**
@@ -163,28 +180,20 @@ class ShiftsFilter
     /**
      * @return int[]
      */
-    public function getRooms()
+    public function getLocations()
     {
-        if (count($this->rooms) == 0) {
+        if (count($this->locations) == 0) {
             return [0];
         }
-        return $this->rooms;
+        return $this->locations;
     }
 
     /**
-     * @param int[] $rooms
+     * @param int[] $locations
      */
-    public function setRooms($rooms)
+    public function setLocations($locations)
     {
-        $this->rooms = $rooms;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isUserShiftsAdmin()
-    {
-        return $this->userShiftsAdmin;
+        $this->locations = $locations;
     }
 
     /**

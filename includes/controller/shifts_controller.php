@@ -1,13 +1,18 @@
 <?php
 
+use Engelsystem\Http\Exceptions\HttpForbidden;
+use Engelsystem\Http\Exceptions\HttpNotFound;
+use Engelsystem\Http\Redirector;
 use Engelsystem\Models\AngelType;
+use Engelsystem\Models\Location;
 use Engelsystem\Models\Shifts\NeededAngelType;
-use Engelsystem\Models\Room;
 use Engelsystem\Models\Shifts\ScheduleShift;
 use Engelsystem\Models\Shifts\Shift;
-use Engelsystem\Models\Shifts\ShiftType;
 use Engelsystem\Models\Shifts\ShiftSignupStatus;
+use Engelsystem\Models\Shifts\ShiftType;
+use Engelsystem\Models\Tag;
 use Engelsystem\ShiftSignupState;
+use Illuminate\Support\Str;
 
 /**
  * @param array|Shift $shift
@@ -20,16 +25,7 @@ function shift_link($shift)
         $parameters['shift_id'] = $shift['shift_id'] ?? $shift['id'];
     }
 
-    return page_link_to('shifts', $parameters);
-}
-
-/**
- * @param Shift $shift
- * @return string
- */
-function shift_delete_link(Shift $shift)
-{
-    return page_link_to('user_shifts', ['delete_shift' => $shift->id]);
+    return url('/shifts', $parameters);
 }
 
 /**
@@ -38,7 +34,7 @@ function shift_delete_link(Shift $shift)
  */
 function shift_edit_link(Shift $shift)
 {
-    return page_link_to('user_shifts', ['edit_shift' => $shift->id]);
+    return url('/user-shifts', ['edit_shift' => $shift->id]);
 }
 
 /**
@@ -52,11 +48,11 @@ function shift_edit_controller()
     $request = request();
 
     if (!auth()->can('admin_shifts')) {
-        throw_redirect(page_link_to('user_shifts'));
+        throw_redirect(url('/user-shifts'));
     }
 
     if (!$request->has('edit_shift') || !test_request_int('edit_shift')) {
-        throw_redirect(page_link_to('user_shifts'));
+        throw_redirect(url('/user-shifts'));
     }
     $shift_id = $request->input('edit_shift');
 
@@ -67,14 +63,14 @@ function shift_edit_controller()
         ));
     }
 
-    $rooms = [];
-    foreach (Room::orderBy('name')->get() as $room) {
-        $rooms[$room->id] = $room->name;
+    $locations = [];
+    foreach (Location::orderBy('name')->get() as $location) {
+        $locations[$location->id] = $location->name;
     }
     $angeltypes = AngelType::all()->pluck('name', 'id')->toArray();
     $shifttypes = ShiftType::all()->pluck('name', 'id')->toArray();
 
-    $needed_angel_types = collect(NeededAngelTypes_by_shift($shift_id))->pluck('count', 'angel_type_id')->toArray();
+    $needed_angel_types = collect(NeededAngelTypes_by_shift($shift))->pluck('count', 'angel_type_id')->toArray();
     foreach (array_keys($angeltypes) as $angeltype_id) {
         if (!isset($needed_angel_types[$angeltype_id])) {
             $needed_angel_types[$angeltype_id] = 0;
@@ -84,7 +80,7 @@ function shift_edit_controller()
     $shifttype_id = $shift->shift_type_id;
     $title = $shift->title;
     $description = $shift->description;
-    $rid = $shift->room_id;
+    $rid = $shift->location_id;
     $start = $shift->start;
     $end = $shift->end;
 
@@ -92,34 +88,39 @@ function shift_edit_controller()
         // Name/Bezeichnung der Schicht, darf leer sein
         $title = strip_request_item('title');
         $description = strip_request_item_nl('description');
+        $tagNames = collect(explode(',', strip_request_item('tags', '')))
+            ->transform(fn($value) => trim($value))
+            ->filter(fn($value) => $value != '')
+            ->unique()
+            ->toArray();
 
         // Auswahl der sichtbaren Locations für die Schichten
         if (
             $request->has('rid')
             && preg_match('/^\d+$/', $request->input('rid'))
-            && isset($rooms[$request->input('rid')])
+            && isset($locations[$request->input('rid')])
         ) {
             $rid = $request->input('rid');
         } else {
             $valid = false;
-            error(__('Please select a room.'));
+            error(__('Please select a location.'));
         }
 
         if ($request->has('shifttype_id') && isset($shifttypes[$request->input('shifttype_id')])) {
             $shifttype_id = $request->input('shifttype_id');
         } else {
             $valid = false;
-            error(__('Please select a shifttype.'));
+            error(__('Please select a shift type.'));
         }
 
-        if ($request->has('start') && $tmp = DateTime::createFromFormat('Y-m-d H:i', $request->input('start'))) {
+        if ($request->has('start') && $tmp = DateTime::createFromFormat('Y-m-d\TH:i', $request->input('start'))) {
             $start = $tmp;
         } else {
             $valid = false;
             error(__('Please enter a valid starting time for the shifts.'));
         }
 
-        if ($request->has('end') && $tmp = DateTime::createFromFormat('Y-m-d H:i', $request->input('end'))) {
+        if ($request->has('end') && $tmp = DateTime::createFromFormat('Y-m-d\TH:i', $request->input('end'))) {
             $end = $tmp;
         } else {
             $valid = false;
@@ -154,13 +155,16 @@ function shift_edit_controller()
             $shift->shift_type_id = $shifttype_id;
             $shift->title = $title;
             $shift->description = $description;
-            $shift->room_id = $rid;
+            $shift->location_id = $rid;
             $shift->start = $start;
             $shift->end = $end;
             $shift->updatedBy()->associate(auth()->user());
             $shift->save();
 
-            mail_shift_change($oldShift, $shift);
+            event('shift.updating', [
+                'shift' => $shift,
+                'oldShift' => $oldShift,
+            ]);
 
             NeededAngelType::whereShiftId($shift_id)->delete();
             $needed_angel_types_info = [];
@@ -177,12 +181,20 @@ function shift_edit_controller()
                 }
             }
 
+            $shift->tags()->detach();
+            foreach ($tagNames as $tagName) {
+                $tag = Tag::whereName($tagName)->firstOrCreate(['name' => $tagName]);
+                $shift->tags()->attach($tag);
+            }
+
             engelsystem_log(
                 'Updated shift \'' . $shifttypes[$shifttype_id] . ', ' . $title
                 . '\' from ' . $start->format('Y-m-d H:i')
                 . ' to ' . $end->format('Y-m-d H:i')
+                . ' in ' . $locations[$rid]
+                . ' with tags "' . $shift->tags->implode('name', ', ') . '"'
                 . ' with angel types ' . join(', ', $needed_angel_types_info)
-                . ' and description ' . $description
+                . ' and description "' . $description . '"'
             );
             success(__('Shift updated.'));
 
@@ -192,96 +204,119 @@ function shift_edit_controller()
 
     $angel_types_spinner = '';
     foreach ($angeltypes as $angeltype_id => $angeltype_name) {
-        $angel_types_spinner .= form_spinner(
-            'angeltype_count_' . $angeltype_id,
-            $angeltype_name,
-            $needed_angel_types[$angeltype_id]
-        );
+        $angel_types_spinner .=
+            '<div class="col-sm-6 col-md-8 col-lg-6 col-xl-4 col-xxl-3">'
+            . form_spinner(
+                'angeltype_count_' . $angeltype_id,
+                htmlspecialchars($angeltype_name),
+                $needed_angel_types[$angeltype_id],
+                [],
+                (bool) ScheduleShift::whereShiftId($shift->id)->first(),
+            )
+            . '</div>';
     }
 
+    $link = button(url('/shifts', ['action' => 'view', 'shift_id' => $shift_id]), icon('chevron-left'), 'btn-sm', '', __('general.back'));
     return page_with_title(
-        shifts_title(),
+        $link . ' ' . shifts_title(),
         [
             msg(),
             '<noscript>'
             . info(__('This page is much more comfortable with javascript.'), true)
             . '</noscript>',
             form([
-                form_select('shifttype_id', __('Shifttype'), $shifttypes, $shifttype_id),
-                form_text('title', __('Title'), $title),
-                form_select('rid', __('Room:'), $rooms, $rid),
-                form_text('start', __('Start:'), $start->format('Y-m-d H:i')),
-                form_text('end', __('End:'), $end->format('Y-m-d H:i')),
-                form_textarea('description', __('Additional description'), $description),
-                form_info('', __('This description is for single shifts, otherwise please use the description in shift type.')),
-                '<h2>' . __('Needed angels') . '</h2>',
-                $angel_types_spinner,
-                form_submit('submit', __('Save')),
+                div('row', [
+                    div('col-md-6 col-xl-5', [
+                        form_select('shifttype_id', __('Shift type'), $shifttypes, $shifttype_id),
+                        form_text('title', __('title.title'), $title),
+                        form_select('rid', __('Location'), $locations, $rid),
+                    ]),
+                    div('col-md-6 col-xl-7', [
+                        div('row', [
+                            div('col', [
+                                form_textarea('description', __('Additional description'), $description),
+                                form_info(
+                                    '',
+                                    __('This description is for single shifts, otherwise please use the description in shift type.')
+                                ),
+                            ]),
+                        ]),
+                        div('row mt-2', [
+                            form_text(
+                                'tags',
+                                __('form.tags')
+                                . ' <span class="bi bi-info-circle-fill text-info" data-bs-toggle="tooltip" title="'
+                                . htmlspecialchars(__('form.tags.info'))
+                                . '"></span>',
+                                $shift->tags->implode('name', ', ')
+                            ),
+                        ]),
+                    ]),
+                ]),
+                div('row', [
+                    div('col-md-6 col-xl-5', [
+                        div('row', [
+                            div('col-lg-6', [
+                                form_datetime('start', __('shifts.start'), $start),
+                            ]),
+                            div('col-lg-6', [
+                                form_datetime('end', __('shifts.end'), $end),
+                            ]),
+                        ]),
+                    ]),
+                    div('col-md-6 col-xl-7', [
+                        '<h4>' . __('Needed angels') . '</h4>',
+                        div('row', [
+                            $angel_types_spinner,
+                        ]),
+                    ]),
+                ]),
+                form_submit('submit', icon('save') . __('form.save')),
             ]),
         ]
     );
 }
 
-/**
- * @return string
- */
-function shift_delete_controller()
+function shift_delete_controller(): void
 {
     $request = request();
 
+    // Only accessible for admins / ShiCos with user_shifts_admin privileg
     if (!auth()->can('user_shifts_admin')) {
-        throw_redirect(page_link_to('user_shifts'));
+        throw new HttpForbidden();
     }
 
-    // Schicht komplett löschen (nur für admins/user mit user_shifts_admin privileg)
-    if (!$request->has('delete_shift') || !preg_match('/^\d+$/', $request->input('delete_shift'))) {
-        throw_redirect(page_link_to('user_shifts'));
+    // Must contain shift id and confirmation
+    if (!$request->has('delete_shift') || !$request->hasPostData('delete')) {
+        throw new HttpNotFound();
     }
+
     $shift_id = $request->input('delete_shift');
+    /** @var Shift $shift */
+    $shift = Shift::findOrFail($shift_id);
 
-    $shift = Shift($shift_id);
-    if (empty($shift)) {
-        throw_redirect(page_link_to('user_shifts'));
+    event('shift.deleting', ['shift' => $shift]);
+
+    $shift->delete();
+
+    engelsystem_log(
+        'Deleted shift ' . $shift->title . ' (' . $shift->id . ')' . ': ' . $shift->shiftType->name
+        . ' from ' . $shift->start->format('Y-m-d H:i')
+        . ' to ' . $shift->end->format('Y-m-d H:i')
+        . ' in ' . $shift->location->name
+        . ' with tags "' . $shift->tags->implode('name', ', ') . '"'
+        . ' and description "' . $shift->description . '"'
+    );
+    success(__('Shift deleted.'));
+
+    /** @var Redirector $redirect */
+    $redirect = app('redirect');
+    $old = $redirect->back()->getHeaderLine('location');
+    if (Str::contains($old, '/shifts') && Str::contains($old, 'action=view')) {
+        throw_redirect(url('/user-shifts'));
     }
 
-    // Schicht löschen bestätigt
-    if ($request->hasPostData('delete')) {
-        foreach ($shift->shiftEntries as $entry) {
-            event('shift.entry.deleting', [
-                'user'       => $entry->user,
-                'start'      => $shift->start,
-                'end'        => $shift->end,
-                'name'       => $shift->shiftType->name,
-                'title'      => $shift->title,
-                'type'       => $entry->angelType->name,
-                'room'       => $shift->room,
-                'freeloaded' => $entry->freeloaded,
-            ]);
-        }
-
-        $shift->delete();
-
-        engelsystem_log(
-            'Deleted shift ' . $shift->title . ': ' . $shift->shiftType->name
-            . ' from ' . $shift->start->format('Y-m-d H:i')
-            . ' to ' . $shift->end->format('Y-m-d H:i')
-        );
-        success(__('Shift deleted.'));
-        throw_redirect(page_link_to('user_shifts'));
-    }
-
-    return page_with_title(shifts_title(), [
-        error(sprintf(
-            __('Do you want to delete the shift %s from %s to %s?'),
-            $shift->shiftType->name,
-            $shift->start->format(__('Y-m-d H:i')),
-            $shift->end->format(__('H:i'))
-        ), true),
-        form([
-            form_hidden('delete_shift', $shift->id),
-            form_submit('delete', __('delete')),
-        ]),
-    ]);
+    throw_redirect($old);
 }
 
 /**
@@ -293,21 +328,23 @@ function shift_controller()
     $request = request();
 
     if (!auth()->can('user_shifts')) {
-        throw_redirect(page_link_to('/'));
+        throw_redirect(url('/'));
     }
 
     if (!$request->has('shift_id')) {
-        throw_redirect(page_link_to('user_shifts'));
+        throw_redirect(url('/user-shifts'));
     }
 
-    $shift = Shift($request->input('shift_id'));
+    $shift = Shift::with(['shiftEntries.user.state', 'shiftEntries.angelType'])
+        ->findOrFail($request->input('shift_id'));
+    $shift = Shift($shift);
     if (empty($shift)) {
         error(__('Shift could not be found.'));
-        throw_redirect(page_link_to('user_shifts'));
+        throw_redirect(url('/user-shifts'));
     }
 
     $shifttype = $shift->shiftType;
-    $room = $shift->room;
+    $location = $shift->location;
     /** @var AngelType[] $angeltypes */
     $angeltypes = AngelType::all();
     $user_shifts = Shifts_by_user($user->id);
@@ -338,8 +375,8 @@ function shift_controller()
     }
 
     return [
-        $shift->shiftType->name,
-        Shift_view($shift, $shifttype, $room, $angeltypes, $shift_signup_state),
+        htmlspecialchars($shift->shiftType->name),
+        Shift_view($shift, $shifttype, $location, $angeltypes, $shift_signup_state),
     ];
 }
 
@@ -350,13 +387,13 @@ function shifts_controller()
 {
     $request = request();
     if (!$request->has('action')) {
-        throw_redirect(page_link_to('user_shifts'));
+        throw_redirect(url('/user-shifts'));
     }
 
     return match ($request->input('action')) {
         'view' => shift_controller(),
         'next' => shift_next_controller(), // throws redirect
-        default => throw_redirect(page_link_to('/')),
+        default => throw_redirect(url('/')),
     };
 }
 
@@ -366,7 +403,7 @@ function shifts_controller()
 function shift_next_controller()
 {
     if (!auth()->can('user_shifts')) {
-        throw_redirect(page_link_to('/'));
+        throw_redirect(url('/'));
     }
 
     $upcoming_shifts = ShiftEntries_upcoming_for_user(auth()->user());
@@ -375,5 +412,5 @@ function shift_next_controller()
         throw_redirect(shift_link($upcoming_shifts[0]->shift));
     }
 
-    throw_redirect(page_link_to('user_shifts'));
+    throw_redirect(url('/user-shifts'));
 }

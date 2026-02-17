@@ -17,11 +17,12 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  *
  * @property int            $id
  * @property int            $angel_type_id
- * @property int            $confirm_user_id
+ * @property int|null       $confirm_user_id
  * @property bool           $supporter
  *
  * @property-read AngelType $angelType
- * @property-read User      $confirmUser
+ * @property-read User|null $confirmUser
+ * @property-read bool      $isConfirmed
  *
  * @method static QueryBuilder|UserAngelType[] whereId($value)
  * @method static QueryBuilder|UserAngelType[] whereAngelTypeId($value)
@@ -38,6 +39,12 @@ class UserAngelType extends Pivot
 
     /** @var bool Disable timestamps */
     public $timestamps = false; // phpcs:ignore
+
+    /** @var array<string, null|bool> default attributes */
+    protected $attributes = [ // phpcs:ignore
+        'confirm_user_id' => null,
+        'supporter'       => false,
+    ];
 
     /** @var array<string> */
     protected $fillable = [ // phpcs:ignore
@@ -73,5 +80,10 @@ class UserAngelType extends Pivot
     public function confirmUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'confirm_user_id');
+    }
+
+    public function getIsConfirmedAttribute(): bool
+    {
+        return !$this->angelType->restricted || $this->confirm_user_id;
     }
 }

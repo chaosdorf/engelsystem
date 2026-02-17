@@ -1,11 +1,14 @@
 <?php
 
+use Engelsystem\Config\GoodieType;
+use Engelsystem\Helpers\Carbon;
+use Engelsystem\Helpers\Markdown;
 use Engelsystem\Models\AngelType;
-use Engelsystem\Models\Room;
+use Engelsystem\Models\Location;
 use Engelsystem\Models\Shifts\Shift;
 use Engelsystem\Models\Shifts\ShiftEntry;
-use Engelsystem\Models\Shifts\ShiftType;
 use Engelsystem\Models\Shifts\ShiftSignupStatus;
+use Engelsystem\Models\Shifts\ShiftType;
 use Engelsystem\Models\UserAngelType;
 use Engelsystem\ShiftSignupState;
 use Illuminate\Support\Collection;
@@ -14,39 +17,39 @@ use Illuminate\Support\Collection;
  * Renders the basic shift view header.
  *
  * @param Shift $shift
- * @param Room  $room
+ * @param Location $location
  * @return string HTML
  */
-function Shift_view_header(Shift $shift, Room $room)
+function Shift_view_header(Shift $shift, Location $location)
 {
     return div('row', [
         div('col-sm-3 col-xs-6', [
-            '<h4>' . __('Title') . '</h4>',
+            '<h4>' . __('title.title') . '</h4>',
             '<p class="lead">'
             . ($shift->url != ''
-                ? '<a href="' . $shift->url . '">' . $shift->title . '</a>'
-                : $shift->title)
+                ? '<a href="' . htmlspecialchars($shift->url) . '">' . htmlspecialchars($shift->title) . '</a>'
+                : htmlspecialchars($shift->title))
             . '</p>',
         ]),
         div('col-sm-3 col-xs-6', [
-            '<h4>' . __('Start') . '</h4>',
+            '<h4>' . __('shifts.start') . '</h4>',
             '<p class="lead' . (time() >= $shift->start->timestamp ? ' text-success' : '') . '">',
-            icon('calendar-event') . $shift->start->format(__('Y-m-d')),
+            icon('calendar-event') . dateWithEventDay($shift->start->format('Y-m-d')),
             '<br />',
             icon('clock') . $shift->start->format('H:i'),
             '</p>',
         ]),
         div('col-sm-3 col-xs-6', [
-            '<h4>' . __('End') . '</h4>',
+            '<h4>' . __('shifts.end') . '</h4>',
             '<p class="lead' . (time() >= $shift->end->timestamp ? ' text-success' : '') . '">',
-            icon('calendar-event') . $shift->end->format(__('Y-m-d')),
+            icon('calendar-event') . dateWithEventDay($shift->end->format('Y-m-d')),
             '<br />',
             icon('clock') . $shift->end->format('H:i'),
             '</p>',
         ]),
         div('col-sm-3 col-xs-6', [
             '<h4>' . __('Location') . '</h4>',
-            '<p class="lead">' . Room_name_render($room) . '</p>',
+            '<p class="lead">' . location_name_render($location) . '</p>',
         ]),
     ]);
 }
@@ -61,17 +64,48 @@ function Shift_editor_info_render(Shift $shift)
     if (!empty($shift->created_by)) {
         $info[] = sprintf(
             icon('plus-lg') . __('created at %s by %s'),
-            $shift->created_at->format(__('Y-m-d H:i')),
+            $shift->created_at->format(__('general.datetime')),
             User_Nick_render($shift->createdBy)
         );
     }
     if (!empty($shift->updated_by)) {
         $info[] = sprintf(
             icon('pencil') . __('edited at %s by %s'),
-            $shift->updated_at->format(__('Y-m-d H:i')),
+            $shift->updated_at->format(__('general.datetime')),
             User_Nick_render($shift->updatedBy)
         );
     }
+    if ($shift->transaction_id) {
+        $info[] = sprintf(
+            icon('clock-history') . __('History ID: %s'),
+            $shift->transaction_id
+        );
+    }
+    if ($shift->schedule) {
+        $angeltypeSource = $shift->schedule->needed_from_shift_type
+            ? __(
+                'shift.angeltype_source.shift_type',
+                [
+                    auth()->can('schedule.import') ?
+                        '<a href="' . url('/admin/schedule/edit/' . $shift->schedule->id) . '">'
+                        . htmlspecialchars($shift->schedule->name)
+                        . '</a>' : htmlspecialchars($shift->schedule->name),
+                    '<a href="' . url('/admin/shifttypes/' . $shift->shift_type_id) . '">'
+                    . htmlspecialchars($shift->shiftType->name)
+                    . '</a>',
+                ]
+            )
+            : __('shift.angeltype_source.location', [
+                auth()->can('schedule.import') ?
+                    '<a href="' . url('/admin/schedule/edit/' . $shift->schedule->id) . '">'
+                    . htmlspecialchars($shift->schedule->name)
+                    . '</a>' : htmlspecialchars($shift->schedule->name),
+                location_name_render($shift->location),
+            ]);
+    } else {
+        $angeltypeSource = __('Shift');
+    }
+    $info[] = sprintf(__('shift.angeltype_source'), $angeltypeSource);
     return join('<br />', $info);
 }
 
@@ -95,10 +129,10 @@ function Shift_signup_button_render(Shift $shift, AngelType $angeltype)
         return button(shift_entry_create_link($shift, $angeltype), __('Sign up'));
     } elseif (empty($user_angeltype)) {
         return button(
-            page_link_to('angeltypes', ['action' => 'view', 'angeltype_id' => $angeltype->id]),
+            url('/user-angeltypes', ['action' => 'add', 'angeltype_id' => $angeltype->id]),
             sprintf(
-                __('Become %s'),
-                $angeltype->name
+                __('Join %s'),
+                htmlspecialchars($angeltype->name)
             )
         );
     }
@@ -109,19 +143,32 @@ function Shift_signup_button_render(Shift $shift, AngelType $angeltype)
 /**
  * @param Shift                  $shift
  * @param ShiftType              $shifttype
- * @param Room                   $room
+ * @param Location               $location
  * @param AngelType[]|Collection $angeltypes_source
  * @param ShiftSignupState       $shift_signup_state
  * @return string
  */
-function Shift_view(Shift $shift, ShiftType $shifttype, Room $room, $angeltypes_source, ShiftSignupState $shift_signup_state)
-{
+function Shift_view(
+    Shift $shift,
+    ShiftType $shifttype,
+    Location $location,
+    $angeltypes_source,
+    ShiftSignupState $shift_signup_state
+) {
     $shift_admin = auth()->can('admin_shifts');
     $user_shift_admin = auth()->can('user_shifts_admin');
-    $admin_rooms = auth()->can('admin_rooms');
-    $admin_shifttypes = auth()->can('shifttypes');
+    $locationsEdit = auth()->can('locations.edit');
+    $shiftTypesEdit = auth()->can('shifttypes.view');
+    $nightShiftsConfig = config('night_shifts');
+    $goodie = GoodieType::from(config('goodie_type'));
+    $goodie_enabled = $goodie !== GoodieType::None;
 
-    $parsedown = new Parsedown();
+    $supportsAngelTypes = auth()->user()
+        ->userAngelTypes()
+        ->where('supporter', true)
+        ->pluck('angel_types.id');
+
+    $mdRenderer = new Markdown();
 
     $angeltypes = [];
     foreach ($angeltypes_source as $angeltype) {
@@ -131,62 +178,105 @@ function Shift_view(Shift $shift, ShiftType $shifttype, Room $room, $angeltypes_
     $needed_angels = '';
     $neededAngels = new Collection($shift->neededAngels);
     foreach ($neededAngels as $needed_angeltype) {
-        $needed_angels .= Shift_view_render_needed_angeltype($needed_angeltype, $angeltypes, $shift, $user_shift_admin);
+        $needed_angels .= Shift_view_render_needed_angeltype($needed_angeltype, $angeltypes, $shift, $user_shift_admin, $supportsAngelTypes);
     }
 
     $shiftEntry = $shift->shiftEntries;
     foreach ($shiftEntry->groupBy('angel_type_id') as $angelTypes) {
         /** @var Collection $angelTypes */
         $type = $angelTypes->first()['angel_type_id'];
+
         if (!$neededAngels->where('angel_type_id', $type)->first()) {
+            // Additionally added angels (not required by shift)
             $needed_angels .= Shift_view_render_needed_angeltype([
                 'angel_type_id' => $type,
                 'count'         => 0,
                 'restricted'    => true,
-                'taken'         => $angelTypes->count(),
-            ], $angeltypes, $shift, $user_shift_admin);
+                'taken'         => $shiftEntry
+                    ->where('angel_type_id', $type)
+                    ->whereNull('freeloaded_by')
+                    ->count(),
+            ], $angeltypes, $shift, $user_shift_admin, $supportsAngelTypes);
         }
     }
 
     $content = [msg()];
 
-    if ($shift_signup_state->getState() === ShiftSignupStatus::COLLIDES) {
-        $content[] = info(__('This shift collides with one of your shifts.'), true);
-    }
-
-    if ($shift_signup_state->getState() === ShiftSignupStatus::SIGNED_UP) {
-        $content[] = info(__('You are signed up for this shift.'), true);
-    }
-
-    if (config('signup_advance_hours') && $shift->start->timestamp > time() + config('signup_advance_hours') * 3600) {
-        $content[] = info(sprintf(
-            __('This shift is in the far future and becomes available for signup at %s.'),
-            date(__('Y-m-d H:i'), $shift->start->timestamp - config('signup_advance_hours') * 3600)
-        ), true);
-    }
-
     $buttons = [];
-    if ($shift_admin || $admin_shifttypes || $admin_rooms) {
+    if ($shift_admin || $shiftTypesEdit || $locationsEdit) {
         $buttons = [
-            $shift_admin ? button(shift_edit_link($shift), icon('pencil') . __('edit')) : '',
-            $shift_admin ? button(shift_delete_link($shift), icon('trash') . __('delete')) : '',
-            $admin_shifttypes ? button(shifttype_link($shifttype), $shifttype->name) : '',
-            $admin_rooms ? button(room_link($room), icon('pin-map-fill') . $room->name) : '',
+            $shift_admin ? button(shift_edit_link($shift), icon('pencil'), '', '', __('form.edit')) : '',
+            $shift_admin ? form([
+                form_hidden('delete_shift', $shift->id),
+                form_submit(
+                    'delete',
+                    icon('trash'),
+                    '',
+                    false,
+                    'danger',
+                    __('form.delete'),
+                    [
+                        'confirm_submit_title' => __('Do you want to delete the shift "%s" from %s to %s?', [
+                            $shift->shiftType->name,
+                            $shift->start->format(__('general.datetime')),
+                            $shift->end->format(__('H:i')),
+                        ]),
+                        'confirm_button_text' => icon('trash') . __('form.delete'),
+                    ]
+                ),
+            ], url('/user-shifts', ['delete_shift' => $shift->id])) : '',
+            $shiftTypesEdit
+                ? button(url('/admin/shifttypes/' . $shifttype->id), htmlspecialchars($shifttype->name))
+                : '',
+            $locationsEdit
+                ? button(
+                    location_link($location),
+                    icon('pin-map-fill') . htmlspecialchars($location->name)
+                )
+                : '',
         ];
     }
-    $buttons[] = button(user_link(auth()->user()->id), '<span class="icon-icon_angel"></span> ' . __('My shifts'));
-    $content[] = buttons($buttons);
+    $buttons[] = button(
+        user_link(auth()->user()->id),
+        '<span class="icon-icon_angel"></span> ' . __('profile.my_shifts')
+    );
 
-    $content[] = Shift_view_header($shift, $room);
+    $nextShift = $shift->nextShift();
+    $previousShift = $shift->previousShift();
+
+    $navigationButtons = '';
+    if ($nextShift || $previousShift) {
+        $navigationButtons = table_buttons([
+            $previousShift ? button(url('/shifts', ['action' => 'view', 'shift_id' => $previousShift->id]), __('shift.previous')) : '',
+            $nextShift ? button(url('/shifts', ['action' => 'view', 'shift_id' => $nextShift->id]), __('shift.next')) : '',
+        ], 'mb-2');
+    }
+
+    $tags = [];
+    foreach ($shift->tags as $tag) {
+        $tags[] = ' <a href="' . url('/user-shifts', ['tag' => $tag->id]) . '">'
+            . '<span class="badge bg-secondary">' . $tag->name . '</span>'
+            . '</a>';
+    }
+
+    $content[] = $navigationButtons ? div('row', [div('col-md-12', [table_buttons($buttons, 'mb-2'), $navigationButtons])]) : buttons($buttons);
+    $content[] = Shift_view_header($shift, $location);
+
     $content[] = div('row', [
         div('col-sm-6', [
+            Shift_view_alert_render($shift, $shift_signup_state),
             '<h2>' . __('Needed angels') . '</h2>',
             '<div class="list-group">' . $needed_angels . '</div>',
         ]),
         div('col-sm-6', [
-            '<h2>' . __('Description') . '</h2>',
-            $parsedown->parse($shifttype->description),
-            $parsedown->parse($shift->description),
+            div('row', [
+                '<h2>' . __('general.description') . '</h2>',
+                $mdRenderer->render($shifttype->description),
+                $mdRenderer->render($shift->description),
+            ]),
+            div('row', [
+                div('col', $tags),
+            ]),
         ]),
     ]);
 
@@ -194,12 +284,62 @@ function Shift_view(Shift $shift, ShiftType $shifttype, Room $room, $angeltypes_
         $content[] = Shift_editor_info_render($shift);
     }
 
-    $start = $shift->start->format(__('Y-m-d H:i'));
+    $start = $shift->start->format(__('general.datetime'));
 
+    $night_shift_hint = '';
+    if ($shift->isNightShift() && $goodie_enabled) {
+        $night_shift_hint = ' <small><span class="bi bi-moon-stars text-info" data-bs-toggle="tooltip" title="'
+            . __('Night shifts between %d and %d am are multiplied by %d for the goodie score.', [
+                $nightShiftsConfig['start'],
+                $nightShiftsConfig['end'],
+                $nightShiftsConfig['multiplier'],
+            ])
+            . '"></span></small>';
+    }
+    $link = button(url('/user-shifts'), icon('chevron-left'), 'btn-sm', '', __('general.back'));
     return page_with_title(
-        $shift->shiftType->name . ' <small title="' . $start . '" data-countdown-ts="' . $shift->start->timestamp . '">%c</small>',
+        $link . ' '
+        . htmlspecialchars($shift->shiftType->name)
+        . ' <small title="' . $start . '" data-countdown-ts="' . $shift->start->timestamp . '">%c</small>'
+        . $night_shift_hint,
         $content
     );
+}
+
+/**
+ * Checks whether the user is elligible and able to sign up for this shift and
+ * generates an appropriate alert if not.
+ *
+ * @param Shift                  $shift
+ * @param Engelsystem\ShiftSignupState $shift_signup_state
+ * @return string                      '' if no alert is necessary, alert div otherwise
+ */
+function Shift_view_alert_render(
+    Shift $shift,
+    ShiftSignupState $shift_signup_state
+) {
+    $alert = '';
+
+    if ($shift_signup_state->getState() === ShiftSignupStatus::COLLIDES) {
+        $alert = warning(__('This shift collides with one of your shifts.'), true);
+    }
+
+    if ($shift_signup_state->getState() === ShiftSignupStatus::SIGNED_UP) {
+        $alert = info(__('You are signed up for this shift.')
+            . (($shift->start->subHours(config('last_unsubscribe')) < Carbon::now() && $shift->end > Carbon::now())
+                ? ' ' . __('shift.sign_out.hint', [config('last_unsubscribe')])
+                : ''), true);
+    }
+
+    $signupAdvanceSeconds = ($shift->shiftType->signup_advance_hours ?: config('signup_advance_hours')) * 3600;
+    if ($signupAdvanceSeconds && $shift->start->timestamp > time() + $signupAdvanceSeconds) {
+        $alert = info(sprintf(
+            __('This shift is in the far future. It becomes available for signup at %s.'),
+            date(__('general.datetime'), $shift->start->timestamp - $signupAdvanceSeconds)
+        ), true);
+    }
+
+    return $alert;
 }
 
 /**
@@ -207,12 +347,18 @@ function Shift_view(Shift $shift, ShiftType $shifttype, Room $room, $angeltypes_
  * @param AngelType[]|Collection $angeltypes
  * @param Shift                  $shift
  * @param bool                   $user_shift_admin
+ * @param Collection|int[]       $supportsAngelTypes
  * @return string
  */
-function Shift_view_render_needed_angeltype($needed_angeltype, $angeltypes, Shift $shift, $user_shift_admin)
-{
+function Shift_view_render_needed_angeltype(
+    $needed_angeltype,
+    $angeltypes,
+    Shift $shift,
+    $user_shift_admin,
+    $supportsAngelTypes
+) {
     $angeltype = $angeltypes[$needed_angeltype['angel_type_id']];
-    $angeltype_supporter = auth()->user()->isAngelTypeSupporter($angeltype)
+    $angeltype_supporter = $supportsAngelTypes->contains($needed_angeltype['angel_type_id'])
         || auth()->can('admin_user_angeltypes');
 
     $needed_angels = '';
@@ -240,9 +386,15 @@ function Shift_view_render_needed_angeltype($needed_angeltype, $angeltypes, Shif
     );
 
     $angels = [];
-    foreach ($shift->shiftEntries as $shift_entry) {
+    foreach ($shift->shiftEntries->sortBy('user.name', SORT_STRING | SORT_FLAG_CASE) as $shift_entry) {
         if ($shift_entry->angel_type_id == $needed_angeltype['angel_type_id']) {
-            $angels[] = Shift_view_render_shift_entry($shift_entry, $user_shift_admin, $angeltype_supporter, $shift);
+            $angels[] = Shift_view_render_shift_entry(
+                $shift_entry,
+                $user_shift_admin,
+                $angeltype_supporter,
+                $shift,
+                $supportsAngelTypes
+            );
         }
     }
 
@@ -257,27 +409,40 @@ function Shift_view_render_needed_angeltype($needed_angeltype, $angeltypes, Shif
  * @param bool  $user_shift_admin
  * @param bool  $angeltype_supporter
  * @param Shift $shift
+ * @param Collection|int[] $supportsAngelTypes
  * @return string
  */
-function Shift_view_render_shift_entry(ShiftEntry $shift_entry, $user_shift_admin, $angeltype_supporter, Shift $shift)
-{
+function Shift_view_render_shift_entry(
+    ShiftEntry $shift_entry,
+    $user_shift_admin,
+    $angeltype_supporter,
+    Shift $shift,
+    $supportsAngelTypes
+) {
     $entry = User_Nick_render($shift_entry->user);
-    if ($shift_entry->freeloaded) {
+    if ($shift_entry->freeloaded_by) {
         $entry = '<del>' . $entry . '</del>';
     }
     $isUser = $shift_entry->user_id == auth()->user()->id;
     if ($user_shift_admin || $angeltype_supporter || $isUser) {
         $entry .= ' <div class="btn-group m-1">';
-        if ($user_shift_admin || $isUser) {
-            $entry .= button_icon(
-                page_link_to('user_myshifts', ['edit' => $shift_entry->id, 'id' => $shift_entry->user_id]),
-                'pencil',
-                'btn-sm'
-            );
-        }
+        $entry .= button_icon(
+            url('/user-myshifts', ['edit' => $shift_entry->id, 'id' => $shift_entry->user_id]),
+            'pencil',
+            'btn-sm',
+            __('form.edit')
+        );
         $angeltype = $shift_entry->angelType;
-        $disabled = Shift_signout_allowed($shift, $angeltype, $shift_entry->user_id) ? '' : ' btn-disabled';
-        $entry .= button_icon(shift_entry_delete_link($shift_entry), 'trash', 'btn-sm' . $disabled);
+        $isAngeltypeSupporter = $supportsAngelTypes->contains($angeltype->id);
+        $signOutAllowed = Shift_signout_allowed($shift, $angeltype, $shift_entry->user_id, $isAngeltypeSupporter);
+        $disabled = $signOutAllowed ? '' : ' btn-disabled';
+        $entry .= button_icon(
+            shift_entry_delete_link($shift_entry),
+            'trash',
+            'btn-sm btn-danger' . $disabled,
+            __('form.delete'),
+            !$signOutAllowed
+        );
         $entry .= '</div>';
     }
     return $entry;

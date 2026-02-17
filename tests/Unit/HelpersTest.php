@@ -9,6 +9,7 @@ use Engelsystem\Config\Config;
 use Engelsystem\Container\Container;
 use Engelsystem\Events\EventDispatcher;
 use Engelsystem\Helpers\Authenticator;
+use Engelsystem\Helpers\Cache;
 use Engelsystem\Helpers\Translation\Translator;
 use Engelsystem\Http\Redirector;
 use Engelsystem\Http\Request;
@@ -102,6 +103,40 @@ class HelpersTest extends TestCase
     }
 
     /**
+     * @covers \env_secret
+     */
+    public function testEnvSecret(): void
+    {
+        $filename = __DIR__ . '/Assets/foo_secret';
+
+        // Secret from env var when _FILE is emtpy
+        putenv('FOO=');
+        putenv('FOO_FILE=');
+        $this->assertEquals('', env_secret('FOO'));
+
+        putenv('FOO=baz');
+        putenv('FOO_FILE=');
+        $this->assertEquals('baz', env_secret('FOO'));
+
+        // Load secret from file
+        putenv('FOO=');
+        putenv('FOO_FILE=' . $filename);
+        $this->assertEquals('bar' . PHP_EOL, env_secret('FOO'));
+
+        putenv('FOO=baz');
+        putenv('FOO_FILE=' . $filename);
+        $this->assertEquals('bar' . PHP_EOL, env_secret('FOO'));
+
+        // Fallback to env/default when file does not exist / is not readable
+        putenv('FOO=test');
+        putenv('FOO_FILE=/not/existing/file');
+        $this->assertEquals('test', env_secret('FOO'));
+
+        putenv('BAR_FILE=/not/existing/file');
+        $this->assertEquals('default-value', env_secret('BAR', 'default-value'));
+    }
+
+    /**
      * @covers \back
      */
     public function testBack(): void
@@ -122,6 +157,23 @@ class HelpersTest extends TestCase
 
         $return = back(303, ['test' => 'ing']);
         $this->assertEquals($response, $return);
+    }
+
+    /**
+     * @covers \cache
+     */
+    public function testCache(): void
+    {
+        $cache = $this->createMock(Cache::class);
+        $this->setExpects($cache, 'get', ['test', 'default', 42], 'default');
+
+        $app = new Application();
+        $app->instance('cache', $cache);
+
+        $this->assertEquals($cache, cache());
+
+        $return = cache('test', 'default', 42);
+        $this->assertEquals('default', $return);
     }
 
     /**

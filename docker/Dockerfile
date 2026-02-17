@@ -8,7 +8,7 @@ RUN composer --no-ansi dump-autoload --optimize
 FROM alpine AS translation
 RUN apk add gettext
 COPY resources/lang/ /data
-RUN find /data -type f -name '*.po' -exec sh -c 'file="{}"; msgfmt "${file%.*}.po" -o "${file%.*}.mo"' \;
+RUN find /data -type f -name '*.po' -exec sh -c 'msgfmt "${1%.*}.po" -o"${1%.*}.mo"' shell {} \;
 
 # Build the themes
 FROM node:20-alpine AS themes
@@ -26,6 +26,7 @@ COPY config/ /app/config
 COPY db/ /app/db
 COPY includes/ /app/includes
 COPY public/ /app/public
+COPY resources/api /app/resources/api
 COPY resources/views /app/resources/views
 COPY src/ /app/src
 COPY storage/ /app/storage
@@ -38,7 +39,7 @@ COPY --from=themes /app/public/assets /app/public/assets/
 RUN find /app/storage/ -type f -not -name VERSION -exec rm {} \;
 
 # Build the PHP/Nginx container
-FROM php:8.2-fpm-alpine
+FROM php:8.3-fpm-alpine
 WORKDIR /var/www
 RUN apk add --no-cache icu-dev nginx && \
     docker-php-ext-install intl pdo_mysql && \

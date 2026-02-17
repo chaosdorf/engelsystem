@@ -15,14 +15,14 @@ trait ResolvesMiddlewareTrait
      * Resolve the middleware with the container
      */
     protected function resolveMiddleware(
-        string|callable|MiddlewareInterface|RequestHandlerInterface $middleware
+        string|callable|array|MiddlewareInterface|RequestHandlerInterface $middleware
     ): MiddlewareInterface|RequestHandlerInterface {
         if ($this->isMiddleware($middleware)) {
             return $middleware;
         }
 
         if (!property_exists($this, 'container') || !$this->container instanceof Application) {
-            throw new InvalidArgumentException('Unable to resolve middleware');
+            throw new InvalidArgumentException('Unable to resolve container for middleware');
         }
 
         /** @var Application $container */
@@ -40,7 +40,7 @@ trait ResolvesMiddlewareTrait
             return $middleware;
         }
 
-        throw new InvalidArgumentException('Unable to resolve middleware');
+        throw new InvalidArgumentException('Unable to resolve middleware or callable');
     }
 
     /**

@@ -15,6 +15,7 @@ use Engelsystem\Http\Request;
 use Engelsystem\Http\Response;
 use Engelsystem\Http\Validation\Validator;
 use Engelsystem\Mail\EngelsystemMailer;
+use Engelsystem\Models\Session as SessionModel;
 use Engelsystem\Models\User\PasswordReset;
 use Engelsystem\Models\User\User;
 use Engelsystem\Renderer\Renderer;
@@ -29,7 +30,6 @@ class PasswordResetControllerTest extends ControllerTest
     use ArraySubsetAsserts;
     use HasDatabase;
 
-    /** @var array */
     protected array $args = [];
 
     /**
@@ -108,7 +108,7 @@ class PasswordResetControllerTest extends ControllerTest
     {
         $this->initDatabase();
 
-        $this->app->instance('config', new Config(['min_password_length' => 3]));
+        $this->app->instance('config', new Config(['password_min_length' => 3]));
         $user = $this->createUser();
         $token = $this->createToken($user);
         $request = new Request([], [], ['token' => $token->token]);
@@ -138,7 +138,7 @@ class PasswordResetControllerTest extends ControllerTest
     {
         $this->initDatabase();
 
-        $this->app->instance('config', new Config(['min_password_length' => 3]));
+        $this->app->instance('config', new Config(['password_min_length' => 3]));
         $user = $this->createUser();
         $token = $this->createToken($user);
         $password = 'SomeRandomPasswordForAmazingSecurity';
@@ -147,6 +147,8 @@ class PasswordResetControllerTest extends ControllerTest
             ['password' => $password, 'password_confirmation' => $password],
             ['token' => $token->token]
         );
+        SessionModel::factory()->create(); // Some other session
+        SessionModel::factory(3)->create(['user_id' => $user->id]);
 
         $controller = $this->getController(
             'pages/password/reset-success',
@@ -162,6 +164,12 @@ class PasswordResetControllerTest extends ControllerTest
         $this->assertEmpty((new PasswordReset())->find($user->id));
         $this->assertNotNull(auth()->authenticate($user->name, $password));
         $this->assertHasNoNotifications();
+
+        $this->assertEmpty(
+            SessionModel::whereUserId($user->id)->get(),
+            'All user sessions should be deleted after successful password reset'
+        );
+        $this->assertCount(1, SessionModel::all()); // Another session should be still there
     }
 
     /**
@@ -172,7 +180,7 @@ class PasswordResetControllerTest extends ControllerTest
     {
         $this->initDatabase();
 
-        $this->app->instance('config', new Config(['min_password_length' => 3]));
+        $this->app->instance('config', new Config(['password_min_length' => 3]));
         $user = $this->createUser();
         $token = $this->createToken($user);
         $password = 'SomeRandomPasswordForAmazingSecurity';

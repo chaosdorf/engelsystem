@@ -7,26 +7,20 @@ namespace Engelsystem\Mail;
 use Engelsystem\Helpers\Translation\Translator;
 use Engelsystem\Models\User\User;
 use Engelsystem\Renderer\Renderer;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Mailer\MailerInterface;
 
 class EngelsystemMailer extends Mailer
 {
-    protected ?Renderer $view = null;
-
-    protected ?Translator $translation = null;
-
     protected ?string $subjectPrefix = null;
 
-    /**
-     * @param Renderer|null   $view
-     * @param Translator|null $translation
-     */
-    public function __construct(MailerInterface $mailer, Renderer $view = null, Translator $translation = null)
-    {
-        parent::__construct($mailer);
-
-        $this->translation = $translation;
-        $this->view = $view;
+    public function __construct(
+        LoggerInterface $log,
+        MailerInterface $mailer,
+        protected ?Renderer $view = null,
+        protected ?Translator $translation = null
+    ) {
+        parent::__construct($log, $mailer);
     }
 
     /**
@@ -38,7 +32,7 @@ class EngelsystemMailer extends Mailer
         string $template,
         array $data = [],
         ?string $locale = null
-    ): void {
+    ): bool {
         if ($to instanceof User) {
             $locale = $locale ?: $to->settings->language;
             $to = $to->contact->email ?: $to->email;
@@ -48,18 +42,20 @@ class EngelsystemMailer extends Mailer
         if (
             $locale
             && $this->translation
-            && isset($this->translation->getLocales()[$locale])
+            && in_array($locale, $this->translation->getLocales())
         ) {
             $activeLocale = $this->translation->getLocale();
             $this->translation->setLocale($locale);
         }
 
         $subject = $this->translation ? $this->translation->translate($subject, $data) : $subject;
-        $this->sendView($to, $subject, $template, $data);
+        $status = $this->sendView($to, $subject, $template, $data);
 
         if ($activeLocale) {
             $this->translation->setLocale($activeLocale);
         }
+
+        return $status;
     }
 
     /**
@@ -67,11 +63,11 @@ class EngelsystemMailer extends Mailer
      *
      * @param string|string[] $to
      */
-    public function sendView(string|array $to, string $subject, string $template, array $data = []): void
+    public function sendView(string|array $to, string $subject, string $template, array $data = []): bool
     {
         $body = $this->view->render($template, $data);
 
-        $this->send($to, $subject, $body);
+        return $this->send($to, $subject, $body);
     }
 
     /**
@@ -79,13 +75,13 @@ class EngelsystemMailer extends Mailer
      *
      * @param string|string[] $to
      */
-    public function send(string|array $to, string $subject, string $body): void
+    public function send(string|array $to, string $subject, string $body): bool
     {
         if ($this->subjectPrefix) {
             $subject = sprintf('[%s] %s', $this->subjectPrefix, trim($subject));
         }
 
-        parent::send($to, $subject, $body);
+        return parent::send($to, $subject, $body);
     }
 
     public function getSubjectPrefix(): string

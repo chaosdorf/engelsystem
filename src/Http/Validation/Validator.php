@@ -6,7 +6,9 @@ namespace Engelsystem\Http\Validation;
 
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use ReflectionProperty;
 use Respect\Validation\Exceptions\ComponentException;
+use Respect\Validation\Factory;
 use Respect\Validation\Validator as RespectValidator;
 
 class Validator
@@ -17,66 +19,67 @@ class Validator
     protected array $data = [];
 
     protected array $mapping = [
-        'accepted' => 'TrueVal',
+        'accepted' => 'Checked',
         'int'      => 'IntVal',
         'float'    => 'FloatVal',
         'required' => 'NotEmpty',
+        'optional' => 'nullable',
     ];
-
-    protected array $nestedRules = ['optional', 'not'];
 
     public function validate(array $data, array $rules): bool
     {
         $this->errors = [];
         $this->data = [];
 
-        foreach ($rules as $key => $values) {
-            $v = new RespectValidator();
-            $v->with('\\Engelsystem\\Http\\Validation\\Rules', true);
+        $this->configureValidationFactory();
 
-            $value = isset($data[$key]) ? $data[$key] : null;
-            $values = explode('|', $values);
+        $validData = [];
+        foreach ($rules as $fieldName => $rulesList) {
+            $value = $data[$fieldName] ?? null;
+            $rulesList = is_array($rulesList) ? $rulesList : explode('|', $rulesList);
 
-            $packing = [];
-            foreach ($this->nestedRules as $rule) {
-                if (in_array($rule, $values)) {
-                    $packing[] = $rule;
-                }
-            }
+            // Configure the check to be run for every rule
+            foreach ($rulesList as $parameters) {
+                $v = new RespectValidator();
 
-            $values = array_diff($values, $this->nestedRules);
-            foreach ($values as $parameters) {
-                $parameters = explode(':', $parameters);
+                $parameters = is_array($parameters) ? $parameters : explode(':', $parameters);
                 $rule = array_shift($parameters);
                 $rule = Str::camel($rule);
                 $rule = $this->map($rule);
 
-                // To allow rules nesting
-                $w = $v;
-                try {
-                    foreach (array_reverse(array_merge($packing, [$rule])) as $rule) {
-                        if (!in_array($rule, $this->nestedRules)) {
-                            call_user_func_array([$w, $rule], $parameters);
-                            continue;
-                        }
-
-                        $w = call_user_func_array([new RespectValidator(), $rule], [$w]);
+                // Handle empty/optional values
+                if ($rule == 'nullable') {
+                    if (is_null($value) || $value === '') {
+                        $validData[$fieldName] = null;
+                        break;
                     }
+
+                    $validData[$fieldName] = $value;
+                    continue;
+                }
+
+                // Configure the validation
+                try {
+                    $v = call_user_func_array([$v, $rule], $parameters);
                 } catch (ComponentException $e) {
                     throw new InvalidArgumentException($e->getMessage(), $e->getCode(), $e);
                 }
 
-                if ($w->validate($value)) {
-                    $this->data[$key] = $value;
+                // Run validation
+                if ($v->validate($value)) {
+                    $validData[$fieldName] = $value;
                 } else {
-                    $this->errors[$key][] = implode('.', ['validation', $key, $this->mapBack($rule)]);
+                    $this->errors[$fieldName][] = implode('.', ['validation', $fieldName, $this->mapBack($rule)]);
                 }
-
-                $v->removeRules();
             }
         }
 
-        return empty($this->errors);
+        $success = empty($this->errors);
+        if ($success) {
+            $this->data = $validData;
+        }
+
+        return $success;
     }
 
     protected function map(string $rule): string
@@ -109,5 +112,17 @@ class Validator
         $this->errors = array_merge($this->errors, $errors);
 
         return $this;
+    }
+
+    protected function configureValidationFactory(): void
+    {
+        $f = (new Factory())
+            ->withRuleNamespace('\\Engelsystem\\Http\\Validation\\Rules');
+
+        // Hacking around, alternative is to reimplement it...
+        $property = new ReflectionProperty($f, 'rulesNamespaces');
+        $property->setValue($f, array_reverse($property->getValue($f)));
+
+        Factory::setDefaultInstance($f);
     }
 }

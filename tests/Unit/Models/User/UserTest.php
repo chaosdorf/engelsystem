@@ -10,11 +10,13 @@ use Engelsystem\Config\Config;
 use Engelsystem\Models\AngelType;
 use Engelsystem\Models\BaseModel;
 use Engelsystem\Models\Group;
+use Engelsystem\Models\LogEntry;
 use Engelsystem\Models\News;
 use Engelsystem\Models\NewsComment;
 use Engelsystem\Models\OAuth;
 use Engelsystem\Models\Privilege;
 use Engelsystem\Models\Question;
+use Engelsystem\Models\Session;
 use Engelsystem\Models\Shifts\Shift;
 use Engelsystem\Models\Shifts\ShiftEntry;
 use Engelsystem\Models\User\Contact;
@@ -75,6 +77,7 @@ class UserTest extends ModelTest
                 'state',
                 [
                     'force_active' => true,
+                    'force_food' => true,
                 ],
             ],
             [
@@ -222,19 +225,42 @@ class UserTest extends ModelTest
             'max_freeloadable_shifts' => 2,
         ]));
 
+        /** @var User $user1 */
+        $user1 = User::factory()->create();
+        /** @var User $user2 */
+        $user2 = User::factory()->create();
+        /** @var User $user3 */
+        $user3 = User::factory()->create();
+
+        $userSource = new User($this->data);
+        $userSource->save();
+        $this->assertFalse($userSource->isFreeloader());
+
+        ShiftEntry::factory()->create(['user_id' => $userSource->id, 'freeloaded_by' => null]);
+        ShiftEntry::factory()->create(['user_id' => $userSource->id, 'freeloaded_by' => $user1->id]);
+        $this->assertFalse($userSource->isFreeloader());
+
+        ShiftEntry::factory()->create(['user_id' => $userSource->id, 'freeloaded_by' => $user2->id]);
+        $this->assertTrue($userSource->isFreeloader());
+
+        ShiftEntry::factory()->create(['user_id' => $userSource->id, 'freeloaded_by' => $user3->id]);
+        $this->assertTrue($userSource->isFreeloader());
+    }
+
+    /**
+     * @covers \Engelsystem\Models\User\User::siftEntriesMarkedFreeloaded
+     */
+    public function testSiftEntriesMarkedFreeloaded(): void
+    {
+        /** @var User $freeloader */
+        $freeloader = User::factory()->create();
+
         $user = new User($this->data);
         $user->save();
-        $this->assertFalse($user->isFreeloader());
 
-        ShiftEntry::factory()->create(['user_id' => $user->id]);
-        ShiftEntry::factory()->create(['user_id' => $user->id, 'freeloaded' => true]);
-        $this->assertFalse($user->isFreeloader());
+        ShiftEntry::factory(2)->create(['user_id' => $freeloader->id, 'freeloaded_by' => $user->id]);
 
-        ShiftEntry::factory()->create(['user_id' => $user->id, 'freeloaded' => true]);
-        $this->assertTrue($user->isFreeloader());
-
-        ShiftEntry::factory()->create(['user_id' => $user->id, 'freeloaded' => true]);
-        $this->assertTrue($user->isFreeloader());
+        $this->assertCount(2, $user->siftEntriesMarkedFreeloaded);
     }
 
     /**
@@ -279,6 +305,19 @@ class UserTest extends ModelTest
 
         $this->assertTrue($user->isAngelTypeSupporter($angelType1));
         $this->assertFalse($user->isAngelTypeSupporter($angelType2));
+    }
+
+    /**
+     * @covers \Engelsystem\Models\User\User::logs
+     */
+    public function testLogs(): void
+    {
+        $user = new User($this->data);
+        $user->save();
+
+        LogEntry::factory(2)->create(['user_id' => $user->id]);
+
+        $this->assertCount(2, $user->logs);
     }
 
     /**
@@ -335,8 +374,9 @@ class UserTest extends ModelTest
      */
     public function testNewsComments(): void
     {
+        News::factory()->create();
         ($user = new User($this->data))->save();
-        $newsComment = NewsComment::create(['news_id' => 0, 'text' => 'test comment', 'user_id' => $user->id]);
+        $newsComment = NewsComment::create(['news_id' => 1, 'text' => 'test comment', 'user_id' => $user->id]);
         $comments = $user->newsComments;
 
         $this->assertCount(1, $comments);
@@ -376,17 +416,33 @@ class UserTest extends ModelTest
     }
 
     /**
+     * @covers \Engelsystem\Models\User\User::sessions
+     */
+    public function testSessions(): void
+    {
+        $user = new User($this->data);
+        $user->save();
+
+        Session::factory(2)->create();
+        Session::factory(3)->create(['user_id' => $user->id]);
+        Session::factory(2)->create();
+        Session::factory(4)->create(['user_id' => $user->id]);
+
+        $this->assertCount(7, $user->sessions);
+    }
+
+    /**
      * @covers \Engelsystem\Models\User\User::worklogs
      */
     public function testWorklogs(): void
     {
         ($user = new User($this->data))->save();
         $worklogEntry = Worklog::create([
-            'user_id'    => $user->id,
-            'creator_id' => $user->id,
-            'hours'      => 1,
-            'comment'    => '',
-            'worked_at'  => Carbon::now(),
+            'user_id'     => $user->id,
+            'creator_id'  => $user->id,
+            'hours'       => 1,
+            'description' => '',
+            'worked_at'   => Carbon::now(),
         ]);
 
         $worklogs = $user->worklogs;
@@ -402,11 +458,11 @@ class UserTest extends ModelTest
     {
         ($user = new User($this->data))->save();
         $worklogEntry = Worklog::create([
-            'user_id'    => $user->id,
-            'creator_id' => $user->id,
-            'hours'      => 1,
-            'comment'    => '',
-            'worked_at'  => Carbon::now(),
+            'user_id'     => $user->id,
+            'creator_id'  => $user->id,
+            'hours'       => 1,
+            'description' => '',
+            'worked_at'   => Carbon::now(),
         ]);
 
         $worklogs = $user->worklogsCreated;

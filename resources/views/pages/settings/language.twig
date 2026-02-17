@@ -13,8 +13,9 @@
                 {{ m.info(__('settings.language.info')) }}
                 {{ f.select('select_language', __('settings.language'), languages, {
                     'selected': current_language,
+                    'translate': true,
                 }) }}
-                {{ f.submit(__('form.save')) }}
+                {{ f.submit(__('form.save'), {'icon_left': 'save'}) }}
             </div>
         </div>
     </form>

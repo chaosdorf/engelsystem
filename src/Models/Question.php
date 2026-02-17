@@ -15,13 +15,13 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 /**
  * @property int         $id
  * @property string      $text
- * @property string      $answer
- * @property int         $answerer_id
+ * @property string|null $answer
+ * @property int|null    $answerer_id
  * @property Carbon|null $answered_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  *
- * @property-read User   $answerer
+ * @property-read User|null $answerer
  *
  * @method static Builder|Question whereAnswer($value)
  * @method static Builder|Question whereAnswererId($value)
@@ -36,9 +36,11 @@ class Question extends BaseModel
     /** @var bool Enable timestamps */
     public $timestamps = true; // phpcs:ignore
 
-    /** @var array<string> */
-    protected $dates = [ // phpcs:ignore
-        'answered_at',
+    /** @var array<string, null> default attributes */
+    protected $attributes = [ // phpcs:ignore
+        'answer'      => null,
+        'answerer_id' => null,
+        'answered_at' => null,
     ];
 
     /** @var array<string> */
@@ -54,6 +56,7 @@ class Question extends BaseModel
     protected $casts = [ // phpcs:ignore
         'user_id'     => 'integer',
         'answerer_id' => 'integer',
+        'answered_at' => 'datetime',
     ];
 
     public function answerer(): BelongsTo
@@ -66,10 +69,7 @@ class Question extends BaseModel
         return static::whereAnswererId(null);
     }
 
-    /**
-     * @return Builder|QueryBuilder
-     */
-    public static function answered(): Builder
+    public static function answered(): Builder | QueryBuilder
     {
         return static::whereNotNull('answerer_id');
     }

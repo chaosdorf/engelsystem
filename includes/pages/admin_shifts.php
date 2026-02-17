@@ -1,15 +1,12 @@
 <?php
 
-use Engelsystem\Database\Db;
 use Engelsystem\Helpers\Carbon;
-use Engelsystem\Http\Exceptions\HttpForbidden;
 use Engelsystem\Models\AngelType;
-use Engelsystem\Models\Room;
+use Engelsystem\Models\Location;
 use Engelsystem\Models\Shifts\NeededAngelType;
-use Engelsystem\Models\Shifts\Schedule;
 use Engelsystem\Models\Shifts\Shift;
 use Engelsystem\Models\Shifts\ShiftType;
-use Engelsystem\Models\User\User;
+use Engelsystem\Models\Tag;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 
@@ -44,12 +41,14 @@ function admin_shifts()
     $shift_over_midnight = true;
 
     // Locations laden
-    $rooms = Room::orderBy('name')->get();
-    $room_array = $rooms->pluck('name', 'id')->toArray();
+    $locations = Location::orderBy('name')->get();
+    $no_locations = $locations->isEmpty();
+    $location_array = $locations->pluck('name', 'id')->toArray();
 
     // Load angeltypes
-    /** @var AngelType[] $types */
+    /** @var AngelType[]|Collection $types */
     $types = AngelType::all();
+    $no_angeltypes = $types->isEmpty();
     $needed_angel_types = [];
     foreach ($types as $type) {
         $needed_angel_types[$type->id] = 0;
@@ -57,11 +56,19 @@ function admin_shifts()
 
     // Load shift types
     /** @var ShiftType[]|Collection $shifttypes_source */
-    $shifttypes_source = ShiftType::all();
+    $shifttypes_source = ShiftType::query()->orderBy('name')->get();
+    $no_shifttypes = $shifttypes_source->isEmpty();
     $shifttypes = [];
     foreach ($shifttypes_source as $shifttype) {
         $shifttypes[$shifttype->id] = $shifttype->name;
     }
+
+    // The shifts tags, might be empty
+    $tags = collect(explode(',', strip_request_item('tags', '')))
+        ->transform(fn($value) => trim($value))
+        ->filter(fn($value) => $value != '')
+        ->unique()
+        ->toArray();
 
     if ($request->has('preview') || $request->has('back')) {
         if ($request->has('shifttype_id')) {
@@ -77,22 +84,22 @@ function admin_shifts()
             error(__('Please select a shift type.'));
         }
 
-        // Name/Bezeichnung der Schicht, darf leer sein
-        $title = strip_request_item('title');
+        // Name/designation of the shift, may be empty
+        $title = substr(strip_request_item('title'), 0, 255);
 
-        // Beschreibung der Schicht, darf leer sein
+        // Description of the shift, may be empty
         $description = strip_request_item_nl('description');
 
-        // Auswahl der sichtbaren Locations für die Schichten
+        // Selection of the visible locations for the layers
         if (
-            $request->has('rid')
-            && preg_match('/^\d+$/', $request->input('rid'))
-            && isset($room_array[$request->input('rid')])
+            $request->has('lid')
+            && preg_match('/^\d+$/', $request->input('lid'))
+            && isset($location_array[$request->input('lid')])
         ) {
-            $rid = $request->input('rid');
+            $lid = $request->input('lid');
         } else {
             $valid = false;
-            $rid = $rooms->first()->id;
+            $lid = $locations->first()?->id ?? 0;
             error(__('Please select a location.'));
         }
 
@@ -139,11 +146,17 @@ function admin_shifts()
                         'trim',
                         explode(',', $request->input('change_hours'))
                     );
-                    // Fehlende Minutenangaben ergänzen, 24 Uhr -> 00 Uhr
+                    // Add missing minutes, 24:00 -> 00:00
                     array_walk($change_hours, function (&$value) use ($valid) {
+                        // Add minutes
                         if (!preg_match('/^(\d{1,2}):\d{2}$/', $value)) {
                             $value .= ':00';
                         }
+                        // Add 0 before low hours
+                        if (preg_match('/^\d:\d{2}$/', $value)) {
+                            $value = '0' . $value;
+                        }
+                        // Fix 24:00
                         if ($value == '24:00') {
                             $value = '00:00';
                         }
@@ -169,7 +182,9 @@ function admin_shifts()
         }
 
         if ($request->has('angelmode')) {
-            if ($request->input('angelmode') == 'location') {
+            if ($request->input('angelmode') == 'shift_type') {
+                $angelmode = 'shift_type';
+            } elseif ($request->input('angelmode') == 'location') {
                 $angelmode = 'location';
             } elseif ($request->input('angelmode') == 'manually') {
                 foreach ($types as $type) {
@@ -180,29 +195,41 @@ function admin_shifts()
                         error(sprintf(__('Please check the needed angels for team %s.'), $type->name));
                     }
                 }
-
-                if (array_sum($needed_angel_types) == 0) {
-                    $valid = false;
-                    error(__('There are 0 angels needed. Please enter the amounts of needed angels.'));
-                }
             } else {
                 $valid = false;
                 error(__('Please select a mode for needed angels.'));
+            }
+
+            if (
+                $angelmode == 'manually' && array_sum($needed_angel_types) == 0
+                || $angelmode == 'location' && !NeededAngelType::whereLocationId($lid)
+                    ->where('count', '>', '0')
+                    ->count()
+                || $angelmode == 'shift_type' && !NeededAngelType::whereShiftTypeId($shifttype_id)
+                    ->where('count', '>', '0')
+                    ->count()
+            ) {
+                $valid = false;
+                error(__('There are 0 angels needed. Please enter the amounts of needed angels.'));
             }
         } else {
             $valid = false;
             error(__('Please select needed angels.'));
         }
 
-        // Beim Zurück-Knopf das Formular zeigen
+        // Show the form when you press the back button
         if ($request->has('back')) {
             $valid = false;
         }
 
-        // Alle Eingaben in Ordnung
+        // All entries OK
         if ($valid) {
-            if ($angelmode == 'location') {
-                $needed_angel_types = NeededAngelType::whereRoomId($rid)
+            if ($angelmode == 'shift_type') {
+                $needed_angel_types = NeededAngelType::whereShiftTypeId($shifttype_id)
+                        ->pluck('count', 'angel_type_id')
+                        ->toArray() + $needed_angel_types;
+            } elseif ($angelmode == 'location') {
+                $needed_angel_types = NeededAngelType::whereLocationId($lid)
                         ->pluck('count', 'angel_type_id')
                         ->toArray() + $needed_angel_types;
             }
@@ -212,7 +239,7 @@ function admin_shifts()
                 $shifts[] = [
                     'start'         => $start,
                     'end'           => $end,
-                    'room_id'       => $rid,
+                    'location_id'   => $lid,
                     'title'         => $title,
                     'shift_type_id' => $shifttype_id,
                     'description'   => $description,
@@ -232,7 +259,7 @@ function admin_shifts()
                     $shifts[] = [
                         'start'         => $shift_start,
                         'end'           => $shift_end,
-                        'room_id'       => $rid,
+                        'location_id'   => $lid,
                         'title'         => $title,
                         'shift_type_id' => $shifttype_id,
                         'description'   => $description,
@@ -248,10 +275,10 @@ function admin_shifts()
                     // Alle Schichtwechselstunden durchgehen
                     for ($i = 0; $i < count($change_hours); $i++) {
                         $start_hour = $change_hours[$i];
-                        if ($i < count($change_hours) - 1) {
+                        if (isset($change_hours[$i + 1])) {
                             // Normales Intervall zwischen zwei Schichtwechselstunden
                             $end_hour = $change_hours[$i + 1];
-                        } elseif ($shift_over_midnight) {
+                        } elseif ($shift_over_midnight && $day != $end_day) {
                             // Letzte Schichtwechselstunde: Wenn eine 24h Abdeckung gewünscht ist,
                             // hier die erste Schichtwechselstunde als Ende einsetzen
                             $end_hour = $change_hours[0];
@@ -293,7 +320,7 @@ function admin_shifts()
                         $shifts[] = [
                             'start'         => $interval_start,
                             'end'           => $interval_end,
-                            'room_id'       => $rid,
+                            'location_id'   => $lid,
                             'title'         => $title,
                             'shift_type_id' => $shifttype_id,
                             'description'   => $description,
@@ -310,17 +337,27 @@ function admin_shifts()
 
             $shifts_table = [];
             foreach ($shifts as $shift) {
+                $shiftType = $shifttypes_source->find($shift['shift_type_id']);
+                $location = $locations->find($shift['location_id']);
+
+                /** @var Carbon $start */
+                $start = $shift['start'];
+                /** @var Carbon $end */
+                $end = $shift['end'];
                 $shifts_table_entry = [
                     'timeslot'      =>
                         icon('clock-history') . ' '
-                        . $shift['start']->format(__('Y-m-d H:i'))
+                        . dateWithEventDay($start->format('Y-m-d')) . ' ' . $start->format(__('H:i'))
                         . ' - '
-                        . $shift['end']->format(__('H:i'))
-                        . '<br />'
-                        . Room_name_render(Room::find($shift['room_id'])),
+                        . '<span title="' . dateWithEventDay($end->format('Y-m-d')) . '">'
+                        . $end->format(__('H:i'))
+                        . '</span>'
+                        . ', ' . round($start->copy()->diffInMinutes($end) / 60, 2) . 'h'
+                        . '<br>'
+                        . location_name_render($location),
                     'title'         =>
-                        ShiftType_name_render(ShiftType::find($shifttype_id))
-                        . ($shift['title'] ? '<br />' . $shift['title'] : ''),
+                        htmlspecialchars($shiftType->name)
+                        . ($shift['title'] ? '<br />' . htmlspecialchars($shift['title']) : ''),
                     'needed_angels' => '',
                 ];
                 foreach ($types as $type) {
@@ -336,9 +373,9 @@ function admin_shifts()
             $session->set('admin_shifts_shifts', $shifts);
             $session->set('admin_shifts_types', $needed_angel_types);
 
-            $hidden_types = '';
+            $previousEntries = [];
             foreach ($needed_angel_types as $type_id => $count) {
-                $hidden_types .= form_hidden('angeltype_count_' . $type_id, $count);
+                $previousEntries['angeltype_count_' . $type_id] = $count;
             }
 
             // Number of Shifts that will be created (if over 100 its danger-red)
@@ -347,29 +384,49 @@ function admin_shifts()
             if ($shiftsCount >= 100) {
                 $shiftsCreationHint = '<span class="text-danger">' . $shiftsCreationHint . '</span>';
             }
+            $tagsList = '';
+            if ($tags) {
+                $tagsList = '<br>' . __('tag.tags') . ': ';
+                foreach ($tags as $tagName) {
+                    $tagsList .= ' <span class="badge bg-secondary">' . $tagName . '</span>';
+                }
+                $tagsList .= '<br><br>';
+            }
 
-            return page_with_title(__('Preview'), [
+            // Save as previous state to be able to reuse it
+            $previousEntries += [
+                'shifttype_id' => $shifttype_id,
+                'description' => $description,
+                'tags' => implode(', ', $tags),
+                'title' => $title,
+                'lid' => $lid,
+                'start' => $request->input('start'),
+                'end' => $request->input('end'),
+                'mode' => $mode,
+                'length' => $length,
+                'change_hours' => implode(', ', $change_hours),
+                'angelmode' => $angelmode,
+                'shift_over_midnight' => $shift_over_midnight ? 'true' : 'false',
+            ];
+            $session->set('admin_shifts_previous', $previousEntries);
+
+            $hidden_types = '';
+            foreach ($previousEntries as $name => $value) {
+                $hidden_types .= form_hidden($name, $value);
+            }
+
+            return page_with_title(__('form.preview'), [
                 form([
                     $hidden_types,
-                    form_hidden('shifttype_id', $shifttype_id),
-                    form_hidden('description', $description),
-                    form_hidden('title', $title),
-                    form_hidden('rid', $rid),
-                    form_hidden('start', $start->format('Y-m-d H:i')),
-                    form_hidden('end', $end->format('Y-m-d H:i')),
-                    form_hidden('mode', $mode),
-                    form_hidden('length', $length),
-                    form_hidden('change_hours', implode(', ', $change_hours)),
-                    form_hidden('angelmode', $angelmode),
-                    form_hidden('shift_over_midnight', $shift_over_midnight ? 'true' : 'false'),
-                    form_submit('back', icon('chevron-left') . __('back')),
+                    form_submit('back', icon('chevron-left') . __('general.back')),
                     $shiftsCreationHint,
+                    $tagsList,
                     table([
                         'timeslot'      => __('Time and location'),
                         'title'         => __('Type and title'),
                         'needed_angels' => __('Needed angels'),
                     ], $shifts_table),
-                    form_submit('submit', icon('save') . __('Save')),
+                    form_submit('submit', icon('save') . __('form.save')),
                 ]),
             ]);
         }
@@ -378,7 +435,12 @@ function admin_shifts()
             !is_array($session->get('admin_shifts_shifts'))
             || !is_array($session->get('admin_shifts_types'))
         ) {
-            throw_redirect(page_link_to('admin_shifts'));
+            throw_redirect(url('/admin-shifts'));
+        }
+
+        $tagList = collect();
+        foreach ($tags as $tagName) {
+            $tagList->add(Tag::whereName($tagName)->firstOrCreate(['name' => $tagName]));
         }
 
         $transactionId = Str::uuid();
@@ -388,15 +450,6 @@ function admin_shifts()
             $shift->transaction_id = $transactionId;
             $shift->createdBy()->associate(auth()->user());
             $shift->save();
-
-            engelsystem_log(
-                'Shift created: ' . $shifttypes[$shift->shift_type_id]
-                . ' with title ' . $shift->title
-                . ' with description ' . $shift->description
-                . ' from ' . $shift->start->format('Y-m-d H:i')
-                . ' to ' . $shift->end->format('Y-m-d H:i')
-                . ', transaction: ' . $transactionId
-            );
 
             $needed_angel_types_info = [];
             foreach ($session->get('admin_shifts_types', []) as $type_id => $count) {
@@ -411,26 +464,40 @@ function admin_shifts()
                     $needed_angel_types_info[] = $angel_type_source->name . ': ' . $count;
                 }
             }
-            engelsystem_log('Shift needs following angel types: ' . join(', ', $needed_angel_types_info));
+
+            $shift->tags()->attach($tagList);
+
+            engelsystem_log(
+                'Shift created: ' . $shifttypes[$shift->shift_type_id]
+                . ' (' . $shift->id . ')'
+                . ' with title ' . $shift->title
+                . ' and description ' . $shift->description
+                . ' and tags ' . $shift->tags->implode('name', ', ')
+                . ' from ' . $shift->start->format('Y-m-d H:i')
+                . ' to ' . $shift->end->format('Y-m-d H:i')
+                . ' in ' . $shift->location->name
+                . ' with angel types: ' . join(', ', $needed_angel_types_info)
+                . ', transaction: ' . $transactionId
+            );
         }
 
-        success('Shifts created.');
-        throw_redirect(page_link_to('admin_shifts'));
+        success(__('Shifts created.'));
+        throw_redirect(url('/admin-shifts'));
     } else {
         $session->remove('admin_shifts_shifts');
         $session->remove('admin_shifts_types');
     }
 
-    $rid = null;
-    if ($request->has('rid')) {
-        $rid = $request->input('rid');
+    $lid = null;
+    if ($request->has('lid')) {
+        $lid = $request->input('lid');
     }
     $angel_types = '';
     foreach ($types as $type) {
         $angel_types .= '<div class="col-sm-6 col-md-8 col-lg-6 col-xl-4 col-xxl-3">'
             . form_spinner(
                 'angeltype_count_' . $type->id,
-                $type->name,
+                htmlspecialchars($type->name),
                 $needed_angel_types[$type->id],
                 [
                     'radio-name'  => 'angelmode',
@@ -440,34 +507,79 @@ function admin_shifts()
             . '</div>';
     }
 
+    $link = button(url('/user-shifts'), icon('chevron-left'), 'btn-sm', '', __('general.back'));
+    $reset = '';
+    if ($session->has('admin_shifts_previous')) {
+        $reset = form_submit(
+            'back',
+            icon('arrow-counterclockwise'),
+            '',
+            false,
+            'link',
+            __('Reset to previous state')
+        );
+        foreach ($session->get('admin_shifts_previous', []) as $name => $value) {
+            $reset .= form_hidden($name, $value);
+        }
+    }
+
     return page_with_title(
-        admin_shifts_title() . ' ' . sprintf(
+        $link . ' ' . admin_shifts_title() . ' ' . sprintf(
             '<a href="%s">%s</a>',
-            page_link_to('admin_shifts_history'),
+            url('/admin/shifts/history'),
             icon('clock-history')
-        ),
+        ) . form([$reset], '', 'display:inline'),
         [
+            $no_locations ? warning(__('admin_shifts.no_locations')) : '',
+            $no_shifttypes ? warning(__('admin_shifts.no_shifttypes')) : '',
+            $no_angeltypes ? warning(__('admin_shifts.no_angeltypes')) : '',
             msg(),
             form([
                 div('row', [
                     div('col-md-6 col-xl-5', [
-                        form_select('shifttype_id', __('Shifttype'), $shifttypes, $shifttype_id),
-                        form_text('title', __('Title'), $title),
-                        form_select('rid', __('Room'), $room_array, $rid),
+                        form_select('shifttype_id', __('Shift type'), $shifttypes, $shifttype_id),
+                        form_text('title', __('title.title'), $title, false, 255),
+                        form_select('lid', __('Location'), $location_array, $lid),
                     ]),
                     div('col-md-6 col-xl-7', [
-                        form_textarea('description', __('Additional description'), $description),
-                        __('This description is for single shifts, otherwise please use the description in shift type.'),
+                        div('row', [
+                            div('col', [
+                                form_textarea('description', __('Additional description'), $description),
+                                __('This description is for single shifts, otherwise please use the description in shift type.'),
+                            ]),
+                        ]),
+                        div('row mt-2', [
+                            form_text(
+                                'tags',
+                                __('form.tags')
+                                . ' <span class="bi bi-info-circle-fill text-info" data-bs-toggle="tooltip" title="'
+                                . htmlspecialchars(__('form.tags.info'))
+                                . '"></span>',
+                                implode(', ', $tags)
+                            ),
+                        ]),
                     ]),
                 ]),
                 div('row', [
                     div('col-md-6 col-xl-5', [
                         div('row', [
                             div('col-lg-6', [
-                                form_datetime('start', __('Start'), $start),
+                                form_datetime(
+                                    'start',
+                                    __('shifts.start'),
+                                    $request->has('start')
+                                        ? Carbon::createFromDatetime($request->input('start'))
+                                        : $start
+                                ),
                             ]),
                             div('col-lg-6', [
-                                form_datetime('end', __('End'), $end),
+                                form_datetime(
+                                    'end',
+                                    __('shifts.end'),
+                                    $request->has('end')
+                                        ? Carbon::createFromDatetime($request->input('end'))
+                                        : $end
+                                ),
                             ]),
                         ]),
                         form_info(__('Mode')),
@@ -475,7 +587,7 @@ function admin_shifts()
                         form_radio('mode', __('Create multiple shifts'), $mode == 'multi', 'multi'),
                         form_text(
                             'length',
-                            __('Length'),
+                            __('Length (in minutes)'),
                             $request->has('length')
                                 ? $request->input('length')
                                 : '120',
@@ -519,7 +631,13 @@ function admin_shifts()
                         form_info(__('Needed angels')),
                         form_radio(
                             'angelmode',
-                            __('Take needed angels from room settings'),
+                            __('Copy needed angels from shift type settings'),
+                            $angelmode == 'shift_type',
+                            'shift_type'
+                        ),
+                        form_radio(
+                            'angelmode',
+                            __('Copy needed angels from location settings'),
                             $angelmode == 'location',
                             'location'
                         ),
@@ -534,104 +652,8 @@ function admin_shifts()
                         ]),
                     ]),
                 ]),
-                form_submit('preview', icon('search') . __('Preview')),
+                form_submit('preview', icon('eye') . __('form.preview'), 'btn-info'),
             ]),
         ]
     );
-}
-
-function admin_shifts_history_title(): string
-{
-    return __('Shifts history');
-}
-
-/**
- * Display shifts transaction history
- *
- * @return string
- */
-function admin_shifts_history(): string
-{
-    if (!auth()->can('admin_shifts')) {
-        throw new HttpForbidden();
-    }
-
-    $request = request();
-    $transactionId = $request->postData('transaction_id');
-    if ($request->hasPostData('delete') && $transactionId) {
-        $shifts = Shift::whereTransactionId($transactionId)->get();
-
-        engelsystem_log('Deleting ' . count($shifts) . ' shifts (transaction id ' . $transactionId . ')');
-
-        foreach ($shifts as $shift) {
-            $shift = Shift($shift);
-            foreach ($shift->shiftEntries as $entry) {
-                event('shift.entry.deleting', [
-                    'user'       => $entry->user,
-                    'start'      => $shift->start,
-                    'end'        => $shift->end,
-                    'name'       => $shift->shiftType->name,
-                    'title'      => $shift->title,
-                    'type'       => $entry->angelType->name,
-                    'room'       => $shift->room,
-                    'freeloaded' => $entry->freeloaded,
-                ]);
-            }
-
-            $shift->delete();
-
-            engelsystem_log(
-                'Deleted shift ' . $shift->title . ' / ' . $shift->shiftType->name
-                . ' from ' . $shift->start->format('Y-m-d H:i')
-                . ' to ' . $shift->end->format('Y-m-d H:i')
-            );
-        }
-
-        success(sprintf(__('%s shifts deleted.'), count($shifts)));
-        throw_redirect(page_link_to('admin_shifts_history'));
-    }
-
-    $schedules = Schedule::all()->pluck('name', 'id')->toArray();
-    $shiftsData = Db::select('
-        SELECT
-            s.transaction_id,
-            s.title,
-            schedule_shift.schedule_id,
-            COUNT(s.id) AS count,
-            MIN(s.start) AS start,
-            MAX(s.end) AS end,
-            s.created_by AS user_id,
-            MAX(s.created_at) AS created_at
-        FROM shifts AS s
-        LEFT JOIN schedule_shift on schedule_shift.shift_id = s.id
-        WHERE s.transaction_id IS NOT NULL
-        GROUP BY s.transaction_id
-        ORDER BY created_at DESC
-    ');
-
-    foreach ($shiftsData as &$shiftData) {
-        $shiftData['title'] = $shiftData['schedule_id'] ? __('shifts_history.schedule', [$schedules[$shiftData['schedule_id']]]) : $shiftData['title'];
-        $shiftData['user'] = User_Nick_render(User::find($shiftData['user_id']));
-        $shiftData['start'] = Carbon::make($shiftData['start'])->format(__('Y-m-d H:i'));
-        $shiftData['end'] = Carbon::make($shiftData['end'])->format(__('Y-m-d H:i'));
-        $shiftData['created_at'] = Carbon::make($shiftData['created_at'])->format(__('Y-m-d H:i'));
-        $shiftData['actions'] = form([
-            form_hidden('transaction_id', $shiftData['transaction_id']),
-            form_submit('delete', icon('trash') . __('delete all'), 'btn-sm', true, 'danger'),
-        ]);
-    }
-
-    return page_with_title(admin_shifts_history_title(), [
-        msg(),
-        table([
-            'transaction_id' => __('ID'),
-            'title'          => __('Title'),
-            'count'          => __('Count'),
-            'start'          => __('Start'),
-            'end'            => __('End'),
-            'user'           => __('User'),
-            'created_at'     => __('Created'),
-            'actions'        => '',
-        ], $shiftsData),
-    ], true);
 }

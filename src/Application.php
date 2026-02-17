@@ -29,7 +29,7 @@ class Application extends Container
     /**
      * Application constructor.
      */
-    public function __construct(string $appPath = null)
+    public function __construct(?string $appPath = null)
     {
         if (!is_null($appPath)) {
             $this->setAppPath($appPath);
@@ -71,9 +71,8 @@ class Application extends Container
     /**
      * Boot service providers
      *
-     * @param Config|null $config
      */
-    public function bootstrap(Config $config = null): void
+    public function bootstrap(?Config $config = null): void
     {
         if ($this->isBootstrapped) {
             return;
@@ -101,6 +100,7 @@ class Application extends Container
         $this->instance('path', $appPath);
         $this->instance('path.config', $appPath . DIRECTORY_SEPARATOR . 'config');
         $this->instance('path.resources', $appPath . DIRECTORY_SEPARATOR . 'resources');
+        $this->instance('path.resources.api', $this->get('path.resources') . DIRECTORY_SEPARATOR . 'api');
         $this->instance('path.public', $appPath . DIRECTORY_SEPARATOR . 'public');
         $this->instance('path.assets', $this->get('path.resources') . DIRECTORY_SEPARATOR . 'assets');
         $this->instance('path.assets.public', $this->get('path.public') . DIRECTORY_SEPARATOR . 'assets');
@@ -115,8 +115,6 @@ class Application extends Container
 
     /**
      * Set app base path
-     *
-     * @return static
      */
     public function setAppPath(string $appPath): static
     {

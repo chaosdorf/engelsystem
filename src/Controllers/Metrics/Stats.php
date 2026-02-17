@@ -6,22 +6,25 @@ namespace Engelsystem\Controllers\Metrics;
 
 use Carbon\Carbon;
 use Engelsystem\Database\Database;
+use Engelsystem\Models\AngelType;
 use Engelsystem\Models\EventConfig;
 use Engelsystem\Models\Faq;
+use Engelsystem\Models\Location;
 use Engelsystem\Models\LogEntry;
 use Engelsystem\Models\Message;
 use Engelsystem\Models\News;
 use Engelsystem\Models\NewsComment;
 use Engelsystem\Models\OAuth;
 use Engelsystem\Models\Question;
-use Engelsystem\Models\Room;
 use Engelsystem\Models\Shifts\Shift;
+use Engelsystem\Models\Shifts\ShiftType;
 use Engelsystem\Models\User\License;
 use Engelsystem\Models\User\PasswordReset;
 use Engelsystem\Models\User\PersonalData;
 use Engelsystem\Models\User\Settings;
 use Engelsystem\Models\User\State;
 use Engelsystem\Models\User\User;
+use Engelsystem\Models\UserAngelType;
 use Engelsystem\Models\Worklog;
 use Illuminate\Contracts\Database\Query\Builder as BuilderContract;
 use Illuminate\Database\Eloquent\Builder;
@@ -36,13 +39,12 @@ class Stats
     }
 
     /**
-     * The number of not arrived users
+     * The number of users that arrived/not arrived and/or did some work
      *
-     * @param bool|null $working
      */
-    public function arrivedUsers(bool $working = null): int
+    public function usersState(?bool $working = null, bool $arrived = true): int
     {
-        $query = State::whereArrived(true);
+        $query = State::whereArrived($arrived);
 
         if (!is_null($working)) {
             $query
@@ -69,12 +71,12 @@ class Stats
         return $query->count('users_state.user_id');
     }
 
-    /**
-     * The number of not arrived users
-     */
-    public function newUsers(): int
+    public function usersInfo(): int
     {
-        return State::whereArrived(false)->count();
+        return State::query()
+            ->whereNotNull('user_info')
+            ->whereNot('user_info', '')
+            ->count();
     }
 
     public function forceActiveUsers(): int
@@ -82,9 +84,14 @@ class Stats
         return State::whereForceActive(true)->count();
     }
 
+    public function forceFoodUsers(): int
+    {
+        return State::whereForceFood(true)->count();
+    }
+
     public function usersPronouns(): int
     {
-        return PersonalData::where('pronoun', '!=', '')->count();
+        return PersonalData::query()->where('pronoun', '!=', '')->count();
     }
 
     public function email(string $type): int
@@ -92,7 +99,7 @@ class Stats
         return match ($type) {
             'system' => Settings::whereEmailShiftinfo(true)->count(),
             'humans' => Settings::whereEmailHuman(true)->count(),
-            'goody'  => Settings::whereEmailGoody(true)->count(),
+            'goodie'  => Settings::whereEmailGoodie(true)->count(),
             'news'   => Settings::whereEmailNews(true)->count(),
             default  => 0,
         };
@@ -101,9 +108,8 @@ class Stats
     /**
      * The number of currently working users
      *
-     * @param bool|null $freeloaded
      */
-    public function currentlyWorkingUsers(bool $freeloaded = null): int
+    public function currentlyWorkingUsers(?bool $freeloaded = null): int
     {
         $query = User::query()
             ->join('shift_entries', 'shift_entries.user_id', '=', 'users.id')
@@ -112,7 +118,9 @@ class Stats
             ->where('shifts.end', '>', Carbon::now());
 
         if (!is_null($freeloaded)) {
-            $query->where('shift_entries.freeloaded', '=', $freeloaded);
+            $freeloaded
+                ? $query->whereNotNull('shift_entries.freeloaded_by')
+                : $query->whereNull('shift_entries.freeloaded_by');
         }
 
         return $query->count();
@@ -144,9 +152,9 @@ class Stats
         return $return;
     }
 
-    public function tshirts(): int
+    public function goodies(): int
     {
-        return State::whereGotShirt(true)->count();
+        return State::whereGotGoodie(true)->count();
     }
 
     public function tshirtSizes(): Collection
@@ -174,40 +182,43 @@ class Stats
             ->get();
     }
 
-    public function licenses(string $license): int
+    public function licenses(string $license, bool $confirmed = false): int
     {
         $mapping = [
-            'has_car'   => 'has_car',
-            'forklift'  => 'drive_forklift',
-            'car'       => 'drive_car',
-            '3.5t'      => 'drive_3_5t',
-            '7.5t'      => 'drive_7_5t',
-            '12t'       => 'drive_12t',
-            'ifsg_light'      => 'ifsg_certificate_light',
-            'ifsg' => 'ifsg_certificate',
+            'has_car'   => ['has_car', null],
+            'forklift' => ['drive_forklift', 'drive_confirmed'],
+            'car' => ['drive_car', 'drive_confirmed'],
+            '3.5t' => ['drive_3_5t', 'drive_confirmed'],
+            '7.5t' => ['drive_7_5t', 'drive_confirmed'],
+            '12t' => ['drive_12t', 'drive_confirmed'],
+            'ifsg_light' => ['ifsg_certificate_light', 'ifsg_confirmed'],
+            'ifsg' => ['ifsg_certificate', 'ifsg_confirmed'],
         ];
 
         $query = (new License())
             ->getQuery()
-            ->where($mapping[$license], true);
+            ->where($mapping[$license][0], true);
+        if (!is_null($mapping[$license][1])) {
+            $query->where($mapping[$license][1], $confirmed);
+        }
 
         return $query->count();
     }
 
     /**
-     * @param bool|null $done
-     * @param bool|null $freeloaded
      *
      * @codeCoverageIgnore because it is only used in functions that use TIMESTAMPDIFF
      */
-    protected function workSecondsQuery(bool $done = null, bool $freeloaded = null): QueryBuilder
+    protected function workSecondsQuery(?bool $done = null, ?bool $freeloaded = null): QueryBuilder
     {
         $query = $this
             ->getQuery('shift_entries')
             ->join('shifts', 'shifts.id', '=', 'shift_entries.shift_id');
 
         if (!is_null($freeloaded)) {
-            $query->where('freeloaded', '=', $freeloaded);
+            $freeloaded
+                ? $query->whereNotNull('freeloaded_by')
+                : $query->whereNull('freeloaded_by');
         }
 
         if (!is_null($done)) {
@@ -220,12 +231,10 @@ class Stats
     /**
      * The amount of worked seconds
      *
-     * @param bool|null $done
-     * @param bool|null $freeloaded
      *
      * @codeCoverageIgnore as TIMESTAMPDIFF is not implemented in SQLite
      */
-    public function workSeconds(bool $done = null, bool $freeloaded = null): int
+    public function workSeconds(?bool $done = null, ?bool $freeloaded = null): int
     {
         $query = $this->workSecondsQuery($done, $freeloaded);
 
@@ -235,12 +244,10 @@ class Stats
     /**
      * The number of worked shifts
      *
-     * @param bool|null $done
-     * @param bool|null $freeloaded
      *
      * @codeCoverageIgnore as TIMESTAMPDIFF is not implemented in SQLite
      */
-    public function workBuckets(array $buckets, bool $done = null, bool $freeloaded = null): array
+    public function workBuckets(array $buckets, ?bool $done = null, ?bool $freeloaded = null): array
     {
         return $this->getBuckets(
             $buckets,
@@ -291,21 +298,58 @@ class Stats
         );
     }
 
-    public function rooms(): int
+    public function locations(): int
     {
-        return Room::query()
+        return Location::query()
             ->count();
+    }
+
+    public function shiftTypes(): int
+    {
+        return ShiftType::query()
+            ->count();
+    }
+
+    public function angelTypesSum(): int
+    {
+        return AngelType::query()->count();
+    }
+
+    public function angelTypes(): array
+    {
+        $angelTypes = [];
+        $rawAngelTypes = AngelType::query()->select(['id', 'name', 'restricted'])->orderBy('name')->get();
+        foreach ($rawAngelTypes as $angelType) {
+            $restricted = $angelType->restricted;
+            $userAngelTypeQuery = UserAngelType::query()
+                ->where('angel_type_id', $angelType->id);
+
+            $members = $userAngelTypeQuery->count();
+            $supporters = (clone $userAngelTypeQuery)->where('supporter', true)->count();
+            $confirmed = $members - $supporters;
+            $unconfirmed = 0;
+            if ($restricted) {
+                $confirmed = (clone $userAngelTypeQuery)->whereNotNull('confirm_user_id')->count() - $supporters;
+                $unconfirmed = $members - ($supporters + $confirmed);
+            }
+
+            $angelTypes[] = [
+                'name' => $angelType->name,
+                'restricted' => $restricted,
+                'unconfirmed' => $unconfirmed,
+                'supporters' => $supporters,
+                'confirmed' => $confirmed,
+            ];
+        }
+        return $angelTypes;
     }
 
     public function shifts(): int
     {
-        return Shift::count();
+        return Shift::query()->count();
     }
 
-    /**
-     * @param bool|null $meeting
-     */
-    public function announcements(bool $meeting = null): int
+    public function announcements(?bool $meeting = null): int
     {
         $query = is_null($meeting) ? News::query() : News::whereIsMeeting($meeting);
 
@@ -318,10 +362,7 @@ class Stats
             ->count();
     }
 
-    /**
-     * @param bool|null $answered
-     */
-    public function questions(bool $answered = null): int
+    public function questions(?bool $answered = null): int
     {
         $query = Question::query();
         if (!is_null($answered)) {
@@ -383,10 +424,7 @@ class Stats
         return microtime(true) - $start;
     }
 
-    /**
-     * @param string|null $level
-     */
-    public function logEntries(string $level = null): int
+    public function logEntries(?string $level = null): int
     {
         $query = is_null($level) ? LogEntry::query() : LogEntry::whereLevel($level);
 

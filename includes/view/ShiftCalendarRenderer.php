@@ -2,6 +2,8 @@
 
 namespace Engelsystem;
 
+use Engelsystem\Helpers\Carbon;
+use Engelsystem\Models\AngelType;
 use Engelsystem\Models\Shifts\Shift;
 use Engelsystem\Models\Shifts\ShiftEntry;
 use Illuminate\Support\Collection;
@@ -61,28 +63,28 @@ class ShiftCalendarRenderer
     }
 
     /**
-     * Assigns the shifts to different lanes per room if they collide
+     * Assigns the shifts to different lanes per location if they collide
      *
      * @param Shift[] $shifts The shifts to assign
-     * @return array Returns an array that assigns a room_id to an array of ShiftCalendarLane containing the shifts
+     * @return array Returns an array that assigns a location_id to an array of ShiftCalendarLane containing the shifts
      */
     private function assignShiftsToLanes($shifts)
     {
-        // array that assigns a room id to a list of lanes (per room)
+        // array that assigns a location id to a list of lanes (per location)
         $lanes = [];
 
         foreach ($shifts as $shift) {
-            $room = $shift->room;
-            $header = Room_name_render($room);
-            if (!isset($lanes[$room->id])) {
-                // initialize room with one lane
-                $lanes[$room->id] = [
+            $location = $shift->location;
+            $header = location_name_render($location);
+            if (!isset($lanes[$location->id])) {
+                // initialize location with one lane
+                $lanes[$location->id] = [
                     new ShiftCalendarLane($header),
                 ];
             }
-            // Try to add the shift to the existing lanes for this room
+            // Try to add the shift to the existing lanes for this location
             $shift_added = false;
-            foreach ($lanes[$room->id] as $lane) {
+            foreach ($lanes[$location->id] as $lane) {
                 /** @var ShiftCalendarLane $lane */
                 if ($lane->shiftFits($shift)) {
                     $lane->addShift($shift);
@@ -90,11 +92,11 @@ class ShiftCalendarRenderer
                     break;
                 }
             }
-            // If all lanes for this room are busy, create a new lane and add shift to it
+            // If all lanes for this location are busy, create a new lane and add shift to it
             if (!$shift_added) {
                 $newLane = new ShiftCalendarLane($header);
                 $newLane->addShift($shift);
-                $lanes[$room->id][] = $newLane;
+                $lanes[$location->id][] = $newLane;
             }
         }
 
@@ -153,8 +155,8 @@ class ShiftCalendarRenderer
     private function renderShiftLanes()
     {
         $html = '';
-        foreach ($this->lanes as $room_lanes) {
-            foreach ($room_lanes as $lane) {
+        foreach ($this->lanes as $location_lanes) {
+            foreach ($location_lanes as $lane) {
                 $html .= $this->renderLane($lane);
             }
         }
@@ -180,9 +182,36 @@ class ShiftCalendarRenderer
                 $rendered_until += ShiftCalendarRenderer::SECONDS_PER_ROW;
             }
 
+            $needed_angeltypes = collect($this->needed_angeltypes[$shift->id]);
+
+            // Add angel types from shift entries without reference from needed angel types
+            foreach (
+                $shift->shiftEntries
+                    ->whereNotIn('angel_type_id', $needed_angeltypes->pluck('id'))
+                    ->groupBy('angel_type_id') as $shiftEntriesOfAngelType
+            ) {
+                /** @var Collection|ShiftEntry[] $shiftEntriesOfAngelType */
+                /** @var AngelType $angeltype */
+                $angeltype = $shiftEntriesOfAngelType->first()->angelType;
+                $needed_angeltypes[] = [
+                    'id' => $angeltype->id,
+                    'location_id' => null,
+                    'shift_id' => $shift->id,
+                    'shift_type_id' => null,
+                    'angel_type_id' => $angeltype->id,
+                    'count' => $shift->shiftEntries
+                        ->where('angel_type_id', $angeltype->id)
+                        ->whereNull('freeloaded_by')
+                        ->count(),
+                    'name' => $angeltype->name,
+                    'restricted' => $angeltype->restricted,
+                    'shift_self_signup' => $angeltype->shift_self_signup,
+                ];
+            }
+
             list ($shift_height, $shift_html) = $shift_renderer->render(
                 $shift,
-                $this->needed_angeltypes[$shift->id],
+                $needed_angeltypes,
                 $this->shift_entries[$shift->id],
                 auth()->user()
             );
@@ -212,20 +241,27 @@ class ShiftCalendarRenderer
      */
     private function renderTick($time, $label = false)
     {
+        $time = Carbon::createFromTimestamp($time, Carbon::now()->timezone);
         $class = $label ? 'tick bg-' . theme_type() : 'tick ';
-        if ($time % (24 * 60 * 60) == 23 * 60 * 60) {
+
+        $diffNow = $time->diffInMinutes() * 60;
+        if ($diffNow >= 0 && $diffNow < self::SECONDS_PER_ROW) {
+            $class .= ' now';
+        }
+
+        if ($time->isStartOfDay()) {
             if (!$label) {
                 return div($class . ' day');
             }
             return div($class . ' day', [
-                date(__('m-d'), $time) . '<br>' . date(__('H:i'), $time),
+                $time->format(__('m-d')) . '<br>' . $time->format(__('H:i')),
             ]);
-        } elseif ($time % (60 * 60) == 0) {
+        } elseif ($time->isStartOfHour()) {
             if (!$label) {
                 return div($class . ' hour');
             }
             return div($class . ' hour', [
-                date(__('m-d'), $time) . '<br>' . date(__('H:i'), $time),
+                $time->format(__('m-d')) . '<br>' . $time->format(__('H:i')),
             ]);
         }
         return div($class);
@@ -242,7 +278,7 @@ class ShiftCalendarRenderer
 
         $time_slot = [
             div('header ' . $bg, [
-                __('Time'),
+                __('log.time'),
             ]),
         ];
         for ($block = 0; $block < $this->getBlocksPerSlot(); $block++) {
@@ -294,7 +330,7 @@ class ShiftCalendarRenderer
      */
     private function calcBlocksPerSlot()
     {
-        return ceil(
+        return (int) ceil(
             ($this->getLastBlockEndTime() - $this->getFirstBlockStartTime())
             / ShiftCalendarRenderer::SECONDS_PER_ROW
         );
@@ -310,9 +346,9 @@ class ShiftCalendarRenderer
         return div('legend mt-3', [
             badge(__('Your shift'), 'primary'),
             badge(__('Help needed'), 'danger'),
-            badge(__('Other angeltype needed / collides with my shifts'), 'warning'),
+            badge(__('Other angel type needed / collides with my shifts'), 'warning'),
             badge(__('Shift is full'), 'success'),
-            badge(__('Shift running/ended or you have not arrived'), 'secondary'),
+            badge(__('Shift is running/has ended, you have not arrived or signup is blocked otherwise'), 'secondary'),
         ]);
     }
 }

@@ -6,8 +6,10 @@ namespace Engelsystem\Controllers;
 
 use Carbon\CarbonTimeZone;
 use Engelsystem\Helpers\Authenticator;
+use Engelsystem\Helpers\Carbon;
 use Engelsystem\Http\Request;
 use Engelsystem\Http\Response;
+use Engelsystem\Http\UrlGenerator;
 use Engelsystem\Models\News;
 use Engelsystem\Models\Shifts\ShiftEntry;
 use Illuminate\Support\Collection;
@@ -26,6 +28,7 @@ class FeedController extends BaseController
         protected Authenticator $auth,
         protected Request $request,
         protected Response $response,
+        protected UrlGenerator $url,
     ) {
     }
 
@@ -51,10 +54,17 @@ class FeedController extends BaseController
     {
         $shifts = $this->getShifts();
 
+        /* @var string $timezoneTransitionStart */
+        if ($shifts->isNotEmpty()) {
+            $timezoneTransitionStart = $shifts[0]->shift->start->utc()->isoFormat('YYYYMMDDTHHmmss');
+        } else {
+            $timezoneTransitionStart = Carbon::now()->startOfDay()->utc()->isoFormat('YYYYMMDDTHHmmss');
+        }
+
         return $this->withEtag($shifts)
             ->withHeader('content-type', 'text/calendar; charset=utf-8')
             ->withHeader('content-disposition', 'attachment; filename=shifts.ics')
-            ->withView('api/ical', ['shiftEntries' => $shifts]);
+            ->withView('api/ical', ['shiftEntries' => $shifts, 'timezoneTransitionStart' => $timezoneTransitionStart]);
     }
 
     public function shifts(): Response
@@ -68,48 +78,58 @@ class FeedController extends BaseController
             $shift = $entry->shift;
             // Data required for the Fahrplan app integration https://github.com/johnjohndoe/engelsystem
             // See engelsystem-base/src/main/kotlin/info/metadude/kotlin/library/engelsystem/models/Shift.kt
+            // Explicitly typecasts used to stay consistent
             // ! All attributes not defined in $data might change at any time !
             $data = [
                 // Name of the shift (type)
-                'name'           => $shift->shiftType->name,
+                /** @deprecated, use shifttype_name instead */
+                'name'           => (string) $shift->shiftType->name,
                 // Shift / Talk title
-                'title'          => $shift->title,
-                // Shift description
-                'description'    => $shift->description,
+                'title'          => (string) $shift->title,
+                // Shift description, should be shown after shifttype_description, markdown formatted
+                'description'    => (string) $shift->description,
 
-                // Users comment
-                'Comment'        => $entry->user_comment,
+                'link'           => (string) $this->url->to('/shifts', ['action' => 'view', 'shift_id' => $shift->id]),
+
+                // Users comment, might be empty
+                'Comment'        => (string) $entry->user_comment,
 
                 // Shift id
-                'SID'            => $shift->id,
-                // Shift type id
-                'shifttype_id'   => $shift->shiftType->id,
-                // Talk URL
-                'URL'            => $shift->url,
+                'SID'            => (int) $shift->id,
 
-                // Room id
-                'RID'            => $shift->room->id,
-                // Room name
-                'Name'           => $shift->room->name,
-                // Location map url
-                'map_url'        => $shift->room->map_url,
+                // Shift type
+                'shifttype_id'   => (int) $shift->shiftType->id,
+                // General type of the task
+                'shifttype_name' => (string) $shift->shiftType->name,
+                // General description, markdown formatted, might be empty
+                'shifttype_description' => (string) $shift->shiftType->description,
+
+                // Talk URL, mostly empty
+                'URL'            => (string) $shift->url,
+
+                // Location (room) id
+                'RID'            => (int) $shift->location->id,
+                // Location (room) name
+                'Name'           => (string) $shift->location->name,
+                // Location map url, can be empty
+                'map_url'        => (string) $shift->location->map_url,
 
                 // Start timestamp
                 /** @deprecated start_date should be used */
-                'start'          => $shift->start->timestamp,
+                'start'          => (int) $shift->start->timestamp,
                 // Start date
-                'start_date'     => $shift->start->toRfc3339String(),
+                'start_date'     => (string) $shift->start->toRfc3339String(),
                 // End timestamp
                 /** @deprecated end_date should be used */
-                'end'            => $shift->end->timestamp,
+                'end'            => (int) $shift->end->timestamp,
                 // End date
-                'end_date'       => $shift->end->toRfc3339String(),
+                'end_date'       => (string) $shift->end->toRfc3339String(),
 
                 // Timezone offset like "+01:00"
                 /** @deprecated should be retrieved from start_date or end_date */
-                'timezone'       => $timeZone->toOffsetName(),
+                'timezone'       => (string) $timeZone->toOffsetName(),
                 // The events timezone like "Europe/Berlin"
-                'event_timezone' => $timeZone->getName(),
+                'event_timezone' => (string) $timeZone->getName(),
             ];
 
             $response[] = [
@@ -151,7 +171,7 @@ class FeedController extends BaseController
             ->shiftEntries()
             ->leftJoin('shifts', 'shifts.id', 'shift_entries.shift_id')
             ->orderBy('shifts.start')
-            ->with(['shift', 'shift.room', 'shift.shiftType'])
+            ->with(['shift', 'shift.location', 'shift.shiftType'])
             ->get(['*', 'shift_entries.id']);
     }
 }

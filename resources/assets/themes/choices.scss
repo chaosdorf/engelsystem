@@ -10,6 +10,7 @@ $choices-bg-color-dropdown: $input-bg;
 $choices-text-color: $input-color;
 
 $es-choices-highlight-color: $choices-text-color !default;
+$choices-bg-color-disabled: $input-disabled-bg;
 
 @import '~choices.js/src/styles/choices.scss';
 
@@ -18,6 +19,10 @@ $es-choices-highlight-color: $choices-text-color !default;
   line-height: 0;
   min-height: 0;
   padding: $input-padding-y 1.75rem $input-padding-y $input-padding-x !important;
+}
+
+.#{$choices-selector} .#{$choices-selector}__list {
+  z-index: $zindex-sticky + 2;
 }
 
 .#{$choices-selector}__list--single {
@@ -49,4 +54,9 @@ $es-choices-highlight-color: $choices-text-color !default;
   border: 0;
   box-shadow: none;
   color: $input-color !important;
+}
+
+.#{$choices-selector}[data-type*='select-multiple'] .#{$choices-selector}__button,
+.#{$choices-selector}[data-type*='text'] .#{$choices-selector}__button {
+  margin-right: 0;
 }

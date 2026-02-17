@@ -38,10 +38,11 @@ class QuestionsController extends BaseController
         $questions = $this->question
             ->orderBy('answered_at')
             ->orderByDesc('created_at')
-            ->get();
+            ->get()
+            ->load(['user.state', 'answerer.state']);
 
         return $this->response->withView(
-            'pages/questions/overview.twig',
+            'pages/questions/index.twig',
             ['questions' => $questions, 'is_admin' => true]
         );
     }
@@ -56,7 +57,15 @@ class QuestionsController extends BaseController
         $question = $this->question->findOrFail($data['id']);
         $question->delete();
 
-        $this->log->info('Deleted question {question}', ['question' => $question->text]);
+        $this->log->info(
+            'Deleted question "{text}" ({id}) by {user} ({user_id})',
+            [
+                'text' => $question->text,
+                'id' => $question->id,
+                'user' => $question->user->name,
+                'user_id' => $question->user->id,
+            ]
+        );
         $this->addNotification('question.delete.success');
 
         return $this->redirect->to('/admin/questions');
@@ -66,7 +75,7 @@ class QuestionsController extends BaseController
     {
         $questionId = (int) $request->getAttribute('question_id');
 
-        $questions = $this->question->find($questionId);
+        $questions = $this->question->findOrFail($questionId);
 
         return $this->showEdit($questions);
     }
@@ -76,7 +85,7 @@ class QuestionsController extends BaseController
         $questionId = (int) $request->getAttribute('question_id');
 
         /** @var Question $question */
-        $question = $this->question->findOrNew($questionId);
+        $question = $this->question->findOrFail($questionId);
 
         $data = $this->validate($request, [
             'text'    => 'required',
@@ -88,7 +97,15 @@ class QuestionsController extends BaseController
         if (!is_null($data['delete'])) {
             $question->delete();
 
-            $this->log->info('Deleted question "{question}"', ['question' => $question->text]);
+            $this->log->info(
+                'Deleted question "{text}" ({id}) by {user} ({user_id})',
+                [
+                    'text' => $question->text,
+                    'id' => $question->id,
+                    'user' => $question->user->name,
+                    'user_id' => $question->user->id,
+                ]
+            );
 
             $this->addNotification('question.delete.success');
 
@@ -107,8 +124,14 @@ class QuestionsController extends BaseController
         $question->save();
 
         $this->log->info(
-            'Updated questions "{text}": {answer}',
-            ['text' => $question->text, 'answer' => $question->answer]
+            'Saved questions "{text}" ({id}) by {user} ({user_id}): {answer}',
+            [
+                'text' => $question->text,
+                'answer' => $question->answer,
+                'id' => $question->id,
+                'user' => $question->user->name,
+                'user_id' => $question->user->id,
+            ]
         );
 
         $this->addNotification('question.edit.success');

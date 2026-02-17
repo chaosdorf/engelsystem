@@ -11,6 +11,7 @@ use Engelsystem\Helpers\Authenticator;
 use Engelsystem\Http\Exceptions\ValidationException;
 use Engelsystem\Http\Validation\Validator;
 use Engelsystem\Models\News;
+use Engelsystem\Models\User\Settings;
 use Engelsystem\Models\User\User;
 use Engelsystem\Test\Unit\Controllers\ControllerTest;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -18,8 +19,8 @@ use PHPUnit\Framework\MockObject\MockObject;
 class NewsControllerTest extends ControllerTest
 {
     protected Authenticator|MockObject $auth;
+    protected EventDispatcher|MockObject $eventDispatcher;
 
-    /** @var array */
     protected array $data = [
         [
             'title'      => 'Foo',
@@ -42,6 +43,7 @@ class NewsControllerTest extends ControllerTest
                 $this->assertEquals('pages/news/edit.twig', $view);
 
                 $this->assertNotEmpty($data['news']);
+                $this->assertFalse($data['send_notification']);
 
                 return $this->response;
             });
@@ -101,10 +103,13 @@ class NewsControllerTest extends ControllerTest
     public function saveCreateEditProvider(): array
     {
         return [
+            // Text, isMeeting, id, sendNotification
             ['Some test', true],
             ['Some test', false],
             ['Some test', false, 1],
             ['Some test', true, 1],
+            ['Some test', false, null, true],
+            ['Some test', false, 1, true],
         ];
     }
 
@@ -112,25 +117,37 @@ class NewsControllerTest extends ControllerTest
      * @covers       \Engelsystem\Controllers\Admin\NewsController::save
      * @dataProvider saveCreateEditProvider
      *
-     * @param int|null $id
      */
     public function testSaveCreateEdit(
         string $text,
         bool $isMeeting,
-        int $id = null
+        ?int $id = null,
+        bool $sendNotification = false
     ): void {
         $this->request->attributes->set('news_id', $id);
-        $id = $id ?: 2;
         $body = [
-            'title'      => 'Some Title',
-            'text'       => $text,
+            'title' => 'Some Title',
+            'text' => $text,
         ];
         if ($isMeeting) {
             $body['is_meeting'] = '1';
         }
+        if ($sendNotification) {
+            $body['send_notification'] = '1';
+        }
 
-        $this->request = $this->request->withParsedBody($body);
+        $this->eventDispatcher->expects($this->once())
+            ->method('dispatch')
+            ->willReturnCallback(function (string $event, array $payload) use ($id, $sendNotification) {
+                $this->assertEquals($id ? 'news.updated' : 'news.created', $event);
+                $this->assertEquals($sendNotification, $payload['sendNotification']);
+                $this->assertInstanceOf(News::class, $payload['news']);
+
+                return $this->eventDispatcher;
+            });
+
         $this->addUser();
+        $this->request = $this->request->withParsedBody($body);
         $this->response->expects($this->once())
             ->method('redirectTo')
             ->with('http://localhost/news')
@@ -142,13 +159,47 @@ class NewsControllerTest extends ControllerTest
 
         $controller->save($this->request);
 
-        $this->assertTrue($this->log->hasInfoThatContains('Updated'));
+        $this->assertTrue($this->log->hasInfoThatContains('Saved'));
 
         $this->assertHasNotification('news.edit.success');
 
-        $news = (new News())->find($id);
+        /** @var News $news */
+        $news = News::find($id ?: 2);
         $this->assertEquals($text, $news->text);
         $this->assertEquals($isMeeting, (bool) $news->is_meeting);
+    }
+
+    /**
+     * @covers \Engelsystem\Controllers\Admin\NewsController::save
+     */
+    public function testSaveNoContentChange(): void
+    {
+        /** @var News $news */
+        $news = News::factory()->create([
+            'is_pinned' => false,
+        ]);
+        $this->request->attributes->set('news_id', $news->id);
+        $body = [
+            'title' => $news->title,
+            'text' => $news->text,
+            'is_pinned' => '1',
+        ];
+        $this->addUser();
+        $this->request = $this->request->withParsedBody($body);
+
+        /** @var NewsController $controller */
+        $controller = $this->app->make(NewsController::class);
+        $controller->setValidator(new Validator());
+
+        $controller->save($this->request);
+
+        /** @var News $updatedNews */
+        $updatedNews = News::find($news->id);
+        $this->assertEquals($news->title, $updatedNews->title);
+        $this->assertEquals($news->text, $updatedNews->text);
+        $this->assertEquals($news->created_at, $updatedNews->created_at);
+        $this->assertEquals($news->updated_at, $updatedNews->updated_at);
+        $this->assertTrue($updatedNews->is_pinned);
     }
 
     /**
@@ -158,12 +209,13 @@ class NewsControllerTest extends ControllerTest
     {
         $this->request->attributes->set('news_id', 1);
         $this->request = $this->request->withParsedBody([
-            'title'        => 'New title',
-            'text'         => 'New text',
-            'is_meeting'   => '1',
-            'is_pinned'    => '1',
-            'is_important' => '1',
-            'preview'      => '1',
+            'title'          => 'New title',
+            'text'           => 'New text',
+            'is_meeting'     => '1',
+            'is_pinned'      => '1',
+            'is_highlighted' => '1',
+            'preview'        => '1',
+            'send_notification' => '1',
         ]);
         $this->response->expects($this->once())
             ->method('withView')
@@ -175,15 +227,17 @@ class NewsControllerTest extends ControllerTest
                 // Contains new text
                 $this->assertTrue($news->is_meeting);
                 $this->assertTrue($news->is_pinned);
-                $this->assertTrue($news->is_important);
+                $this->assertTrue($news->is_highlighted);
                 $this->assertEquals('New title', $news->title);
                 $this->assertEquals('New text', $news->text);
+
+                $this->assertTrue($data['send_notification']);
 
                 return $this->response;
             });
         $this->auth->expects($this->atLeastOnce())
             ->method('can')
-            ->with('news.important')
+            ->with('news.highlight')
             ->willReturn(true);
 
         /** @var NewsController $controller */
@@ -198,11 +252,12 @@ class NewsControllerTest extends ControllerTest
         $this->assertEquals('**foo**', $news->text);
         $this->assertFalse($news->is_meeting);
         $this->assertFalse($news->is_pinned);
-        $this->assertFalse($news->is_important);
+        $this->assertFalse($news->is_highlighted);
     }
 
     /**
      * @covers \Engelsystem\Controllers\Admin\NewsController::save
+     * @covers \Engelsystem\Controllers\Admin\NewsController::delete
      */
     public function testSaveDelete(): void
     {
@@ -229,11 +284,36 @@ class NewsControllerTest extends ControllerTest
     }
 
     /**
+     * @covers \Engelsystem\Controllers\Admin\NewsController::save
+     */
+    public function testSaveDuplicated(): void
+    {
+        $previousNews = News::first();
+        $this->request = $this->request->withParsedBody([
+            'title'  => $previousNews->title,
+            'text'   => $previousNews->text,
+        ]);
+        $this->response->expects($this->once())
+            ->method('withView')
+            ->willReturn($this->response);
+
+        /** @var NewsController $controller */
+        $controller = $this->app->make(NewsController::class);
+        $controller->setValidator(new Validator());
+
+        $controller->save($this->request);
+
+        $this->assertHasNotification('news.edit.duplicate', NotificationType::ERROR);
+    }
+
+    /**
      * Creates a new user
      */
     protected function addUser(): void
     {
-        $user = User::factory(['id' => 42])->create();
+        $user = User::factory(['id' => 42])
+            ->has(Settings::factory(['email_news' => true]))
+            ->create();
 
         $this->auth->expects($this->any())
             ->method('user')
@@ -250,16 +330,17 @@ class NewsControllerTest extends ControllerTest
         $this->auth = $this->createMock(Authenticator::class);
         $this->app->instance(Authenticator::class, $this->auth);
 
-        $eventDispatcher = $this->createMock(EventDispatcher::class);
-        $eventDispatcher->expects(self::any())
+        $this->eventDispatcher = $this->createMock(EventDispatcher::class);
+        $this->eventDispatcher->expects(self::any())
             ->method('dispatch')
             ->willReturnSelf();
-        $this->app->instance('events.dispatcher', $eventDispatcher);
+        $this->app->instance('events.dispatcher', $this->eventDispatcher);
 
+        $user = User::factory()->create();
         (new News([
             'title'      => 'Foo',
             'text'       => '**foo**',
-            'user_id'    => 1,
+            'user_id'    => $user->id,
         ]))->save();
     }
 }

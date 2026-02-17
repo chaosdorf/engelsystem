@@ -41,31 +41,43 @@ class Handler
         set_exception_handler([$this, 'exceptionHandler']);
     }
 
-    public function errorHandler(int $number, string $message, string $file, int $line): void
+    public function errorHandler(int $errorNumber, string $message, string $file, int $line): bool
     {
-        $exception = new ErrorException($message, 0, $number, $file, $line);
-        $this->exceptionHandler($exception);
+        $handleLevel = $this->environment == Environment::DEVELOPMENT
+            ? E_ALL
+            : E_RECOVERABLE_ERROR | E_COMPILE_ERROR;
+        // If error level should be intercepted or ignored (like warnings in prod)
+        $shouldHandle = (bool) ($errorNumber & $handleLevel);
+
+        $exception = new ErrorException($message, 0, $errorNumber, $file, $line);
+        $this->exceptionHandler($exception, $shouldHandle);
+
+        return $shouldHandle;
     }
 
-    public function exceptionHandler(Throwable $e, bool $return = false): string
+    public function exceptionHandler(Throwable $e, bool $showError = true): string
     {
         if (!$this->request instanceof Request) {
             $this->request = new Request();
         }
 
-        $handler = isset($this->handler[$this->environment->value])
-            ? $this->handler[$this->environment->value] : new Legacy();
+        $handler = $this->handler[$this->environment->value] ?? new Legacy();
         $handler->report($e);
         ob_start();
         $handler->render($this->request, $e);
 
-        if ($return) {
+        if (!$showError) {
             $output = ob_get_contents();
             ob_end_clean();
             return $output;
         }
 
-        http_response_code(500);
+        if (!headers_sent()) {
+            // @codeCoverageIgnoreStart
+            http_response_code(500);
+            // @codeCoverageIgnoreEnd
+        }
+
         ob_end_flush();
 
         $this->terminateApplicationImmediately();
@@ -97,7 +109,7 @@ class Handler
     /**
      * @return HandlerInterface|HandlerInterface[]
      */
-    public function getHandler(Environment $environment = null): HandlerInterface|array
+    public function getHandler(?Environment $environment = null): HandlerInterface|array
     {
         if (!is_null($environment)) {
             return $this->handler[$environment->value];

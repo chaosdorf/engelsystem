@@ -1,5 +1,7 @@
 <?php
 
+use Engelsystem\Models\User\User;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Str;
 
 /**
@@ -70,17 +72,6 @@ function tabs($tabs, $selected = 0)
         '<ul class="nav nav-tabs mb-3" role="tablist">' . join($tab_header) . '</ul>',
         '<div class="tab-content">' . join($tab_content) . '</div>',
     ]);
-}
-
-/**
- * Display muted (grey) text.
- *
- * @param string $text
- * @return string
- */
-function mute($text)
-{
-    return '<span class="text-muted">' . $text . '</span>';
 }
 
 /**
@@ -188,28 +179,23 @@ function toolbar_item_link($href, $icon, $label, $active = false)
     return '<li class="nav-item">'
         . '<a class="nav-link ' . ($active ? 'active" aria-current="page"' : '"') . ' href="' . $href . '">'
         . ($icon != '' ? '<span class="bi bi-' . $icon . '"></span> ' : '')
-        . $label
+        . htmlspecialchars($label)
         . '</a>'
         . '</li>';
 }
 
-function toolbar_dropdown_item(string $href, string $label, bool $active, string $icon = null): string
+function toolbar_dropdown_item(string $href, string $label, bool $active, ?string $icon = null): string
 {
     return strtr(
-        '<li><a class="dropdown-item{active}"{aria} href="{href}">{icon} {label}</a></li>',
+        '<li><a class="dropdown-item{active}" {aria} href="{href}">{icon} {label}</a></li>',
         [
             '{href}'   => $href,
             '{icon}'   => $icon === null ? '' : '<i class="bi bi-' . $icon . '"></i>',
-            '{label}'  => $label,
+            '{label}'  => htmlspecialchars($label),
             '{active}' => $active ? ' active' : '',
             '{aria}' => $active ? ' aria-current="page"' : '',
         ]
     );
-}
-
-function toolbar_dropdown_item_divider(): string
-{
-    return '<li><hr class="dropdown-divider"></li>';
 }
 
 /**
@@ -235,7 +221,7 @@ EOT;
         $template,
         [
             '{class}'   => $active ? ' active' : '',
-            '{label}'   => $label,
+            '{label}'   => htmlspecialchars($label),
             '{submenu}' => join("\n", $submenu),
         ]
     );
@@ -330,7 +316,7 @@ function render_table($columns, $rows, $data = true)
         return info(__('No data found.'), true);
     }
 
-    $html = '<table class="table table-striped' . ($data ? ' data' : '') . '">';
+    $html = '<table class="table table-striped table-sticky-header' . ($data ? ' data' : '') . '">';
     $html .= '<thead><tr>';
     foreach ($columns as $key => $column) {
         $html .= '<th class="column_' . $key . '">' . $column . '</th>';
@@ -338,7 +324,7 @@ function render_table($columns, $rows, $data = true)
     $html .= '</tr></thead>';
     $html .= '<tbody>';
     foreach ($rows as $row) {
-        $html .= '<tr>';
+        $html .= '<tr' . (isset($row['row-class']) ? ' class="' . $row['row-class'] . '"' : '') . '>';
         foreach ($columns as $key => $column) {
             $value = '&nbsp;';
             if (isset($row[$key])) {
@@ -362,7 +348,7 @@ function render_table($columns, $rows, $data = true)
  * @param string $id
  * @return string
  */
-function button($href, $label, $class = '', $id = '')
+function button($href, $label, $class = '', $id = '', $title = '', $disabled = false)
 {
     if (!Str::contains(str_replace(['btn-sm', 'btn-xl'], '', $class), 'btn-')) {
         $class = 'btn-secondary' . ($class ? ' ' . $class : '');
@@ -370,7 +356,8 @@ function button($href, $label, $class = '', $id = '')
 
     $idAttribute = $id ? 'id="' . $id . '"' : '';
 
-    return '<a ' . $idAttribute . ' href="' . $href . '" class="btn ' . $class . '">' . $label . '</a>';
+    return '<a ' . $idAttribute . ' href="' . $href
+        . '" class="btn ' . $class . ($disabled ? ' disabled' : '') . '" title="' . $title . '">' . $label . '</a>';
 }
 
 /**
@@ -396,9 +383,9 @@ function button_checkbox_selection($name, $label, $value)
  *
  * @return string
  */
-function button_icon($href, $icon, $class = '')
+function button_icon($href, $icon, $class = '', $title = '', $disabled = false)
 {
-    return button($href, icon($icon), $class);
+    return button($href, icon($icon), $class, '', $title, $disabled);
 }
 
 /**
@@ -430,4 +417,84 @@ function buttons($buttons = [])
 function table_buttons($buttons = [], $additionalClass = '')
 {
     return '<div class="btn-group ' . $additionalClass . '" role="group">' . join('', $buttons) . '</div>';
+}
+
+function user_info_icon(User $user): string
+{
+    if (!auth()->can('user.info.hint') || !$user->state->user_info) {
+        return '';
+    }
+    $infoIcon = ' <small><span class="bi bi-info-circle-fill text-info" ';
+    if (auth()->can('user.info.view')) {
+        $infoIcon .= 'data-bs-toggle="tooltip" title="' . htmlspecialchars($user->state->user_info) . '"';
+    }
+    $infoIcon .= '></span></small>';
+    return $infoIcon;
+}
+
+function pagination(LengthAwarePaginator $paginator, ?int $selectionSteps = null): string
+{
+    $paginator->appends(request()->getQueryParams());
+
+    $items = '';
+    foreach ($paginator->getUrlRange(1, $paginator->lastPage()) as $page => $url) {
+        $active = '';
+
+        if ($paginator->currentPage() == $page) {
+            $active = ' active';
+        }
+
+        $items .= sprintf(
+            '<li class="page-item%s"><a class="page-link" href="%s">%u</a></li>',
+            $active,
+            $url,
+            $page
+        );
+    }
+
+    if ($selectionSteps) {
+        $selections = [];
+        foreach ([$selectionSteps, $selectionSteps * 5, $selectionSteps * 10] as $selection) {
+            $url = $paginator->appends('c', $selection)->url(1);
+            $selections[] = sprintf(
+                '<li><a class="dropdown-item" href="%s">%s</a></li>',
+                $url,
+                $selection,
+            );
+        }
+        $dropdownValue = request()->get('c', $selectionSteps);
+        $dropdownValue = $dropdownValue  == 'all' || !is_numeric($dropdownValue) ? __('All') : $dropdownValue;
+        $dropdown = sprintf(
+            '
+                <span class="mb-3 m-2 ms-3">%s</span>
+                <div class="dropdown pagination mb-3 " >
+                    <button class="page-link dropdown-toggle btn"
+                        type="button" data-bs-toggle="dropdown"
+                    >
+                        %s
+                    </button>
+                    <ul class="dropdown-menu">
+                        %s
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="%s">%s</a></li>
+                    </ul>
+                </div>
+            ',
+            __('Per page'),
+            $dropdownValue,
+            implode(PHP_EOL, $selections),
+            $paginator->appends('c', 'all')->url(1),
+            __('All'),
+        );
+    }
+
+    return sprintf('
+        <nav class="d-inline-flex text-center">
+            <ul class="pagination">
+                %s
+            </ul>
+            %s
+
+        </nav>
+    ', $items, $dropdown);
 }

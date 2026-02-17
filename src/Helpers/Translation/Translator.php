@@ -24,7 +24,7 @@ class Translator
         protected string $fallbackLocale,
         callable $getTranslatorCallback,
         protected array $locales = [],
-        callable $localeChangeCallback = null
+        ?callable $localeChangeCallback = null
     ) {
         $this->localeChangeCallback = $localeChangeCallback;
         $this->getTranslatorCallback = $getTranslatorCallback;
@@ -59,7 +59,7 @@ class Translator
             try {
                 $translated = call_user_func_array([$translator, $type], $parameters);
                 break;
-            } catch (TranslationNotFound $e) {
+            } catch (TranslationNotFound) {
             }
         }
 
@@ -102,7 +102,7 @@ class Translator
 
     public function hasLocale(string $locale): bool
     {
-        return isset($this->locales[$locale]);
+        return in_array($locale, $this->locales);
     }
 
     /**

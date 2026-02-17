@@ -13,6 +13,7 @@ use Engelsystem\Renderer\Renderer;
 use Engelsystem\Test\Unit\HasDatabase;
 use Engelsystem\Test\Unit\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\NullLogger;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\MailerInterface;
 use Symfony\Component\Mime\RawMessage;
@@ -33,13 +34,14 @@ class EngelsystemMailerTest extends TestCase
         $symfonyMailer = $this->getMockForAbstractClass(MailerInterface::class);
         /** @var EngelsystemMailer|MockObject $mailer */
         $mailer = $this->getMockBuilder(EngelsystemMailer::class)
-            ->setConstructorArgs(['mailer' => $symfonyMailer, 'view' => $view])
+            ->setConstructorArgs(['log' => new NullLogger(), 'mailer' => $symfonyMailer, 'view' => $view])
             ->onlyMethods(['send'])
             ->getMock();
-        $this->setExpects($mailer, 'send', ['foo@bar.baz', 'Lorem dolor', 'Rendered Stuff!']);
+        $this->setExpects($mailer, 'send', ['foo@bar.baz', 'Lorem dolor', 'Rendered Stuff!'], true);
         $this->setExpects($view, 'render', ['test/template.tpl', ['dev' => true]], 'Rendered Stuff!');
 
-        $mailer->sendView('foo@bar.baz', 'Lorem dolor', 'test/template.tpl', ['dev' => true]);
+        $status = $mailer->sendView('foo@bar.baz', 'Lorem dolor', 'test/template.tpl', ['dev' => true]);
+        $this->assertTrue($status);
     }
 
     /**
@@ -63,25 +65,36 @@ class EngelsystemMailerTest extends TestCase
 
         /** @var EngelsystemMailer|MockObject $mailer */
         $mailer = $this->getMockBuilder(EngelsystemMailer::class)
-            ->setConstructorArgs(['mailer' => $symfonyMailer, 'view' => $view, 'translation' => $translator])
+            ->setConstructorArgs([
+                'log' => new NullLogger(),
+                'mailer' => $symfonyMailer,
+                'view' => $view,
+                'translation' => $translator,
+            ])
             ->onlyMethods(['sendView'])
             ->getMock();
 
-        $this->setExpects($mailer, 'sendView', ['foo@bar.baz', 'Lorem dolor', 'test/template.tpl', ['dev' => true]]);
-        $this->setExpects($translator, 'getLocales', null, ['de_DE' => 'de_DE', 'en_US' => 'en_US']);
+        $this->setExpects(
+            $mailer,
+            'sendView',
+            ['foo@bar.baz', 'Lorem dolor', 'test/template.tpl', ['dev' => true]],
+            true
+        );
+        $this->setExpects($translator, 'getLocales', null, ['de_DE', 'en_US']);
         $this->setExpects($translator, 'getLocale', null, 'en_US');
         $this->setExpects($translator, 'translate', ['translatable.text', ['dev' => true]], 'Lorem dolor');
         $translator->expects($this->exactly(2))
             ->method('setLocale')
             ->withConsecutive(['de_DE'], ['en_US']);
 
-        $mailer->sendViewTranslated(
+        $status = $mailer->sendViewTranslated(
             $user,
             'translatable.text',
             'test/template.tpl',
             ['dev' => true],
             'de_DE'
         );
+        $this->assertTrue($status);
     }
 
     /**
@@ -96,7 +109,7 @@ class EngelsystemMailerTest extends TestCase
 
         $symfonyMailer->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (RawMessage $message, Envelope $envelope = null): void {
+            ->willReturnCallback(function (RawMessage $message, ?Envelope $envelope = null): void {
                 $this->assertStringContainsString('foo@bar.baz', $message->toString());
                 $this->assertStringContainsString('Foo Bar', $message->toString());
                 $this->assertStringContainsString('Mail test', $message->toString());
@@ -104,13 +117,14 @@ class EngelsystemMailerTest extends TestCase
                 $this->assertStringContainsString('Lorem Ipsum!', $message->toString());
             });
 
-        $mailer = new EngelsystemMailer($symfonyMailer);
+        $mailer = new EngelsystemMailer(new NullLogger(), $symfonyMailer);
         $mailer->setFromAddress('foo@bar.baz');
         $mailer->setFromName('Foo Bar');
         $mailer->setSubjectPrefix('Mail test');
 
         $this->assertEquals('Mail test', $mailer->getSubjectPrefix());
 
-        $mailer->send('to@xam.pel', 'Foo Bar ', 'Lorem Ipsum!');
+        $status = $mailer->send('to@xam.pel', 'Foo Bar ', 'Lorem Ipsum!');
+        $this->assertTrue($status);
     }
 }

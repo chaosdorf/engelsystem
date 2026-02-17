@@ -9,12 +9,15 @@
     <file>src</file>
     <file>tests</file>
     <exclude-pattern>/config/config.php</exclude-pattern>
+    <exclude-pattern>/config/config.local.php</exclude-pattern>
 
     <rule ref="PSR12" />
     <rule ref="SlevomatCodingStandard.Namespaces.UnusedUses">
         <properties>
             <property name="searchAnnotations" value="true"/>
         </properties>
+    </rule>
+    <rule ref="SlevomatCodingStandard.Namespaces.AlphabeticallySortedUses">
     </rule>
     <rule ref="SlevomatCodingStandard.Variables.UnusedVariable">
         <properties>
@@ -28,6 +31,7 @@
         <exclude-pattern>/includes</exclude-pattern>
         <exclude name="SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingTraversableTypeHintSpecification" />
     </rule>
+    <rule ref="SlevomatCodingStandard.TypeHints.NullableTypeForNullDefaultValue" />
     <rule ref="SlevomatCodingStandard.TypeHints.ReturnTypeHint">
         <exclude-pattern>/includes</exclude-pattern>
         <exclude name="SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingTraversableTypeHintSpecification" />

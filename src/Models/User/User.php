@@ -8,12 +8,14 @@ use Carbon\Carbon;
 use Engelsystem\Models\AngelType;
 use Engelsystem\Models\BaseModel;
 use Engelsystem\Models\Group;
+use Engelsystem\Models\LogEntry;
 use Engelsystem\Models\Message;
 use Engelsystem\Models\News;
 use Engelsystem\Models\NewsComment;
 use Engelsystem\Models\OAuth;
 use Engelsystem\Models\Privilege;
 use Engelsystem\Models\Question;
+use Engelsystem\Models\Session;
 use Engelsystem\Models\Shifts\Shift;
 use Engelsystem\Models\Shifts\ShiftEntry;
 use Engelsystem\Models\UserAngelType;
@@ -34,8 +36,8 @@ use Illuminate\Support\Collection as SupportCollection;
  * @property string                             $password
  * @property string                             $api_key
  * @property Carbon|null                        $last_login_at
- * @property Carbon                             $created_at
- * @property Carbon                             $updated_at
+ * @property Carbon|null                        $created_at
+ * @property Carbon|null                        $updated_at
  *
  * @property-read QueryBuilder|Contact          $contact
  * @property-read QueryBuilder|License          $license
@@ -45,6 +47,7 @@ use Illuminate\Support\Collection as SupportCollection;
  * @property-read string                        $displayName
  *
  * @property-read Collection|Group[]            $groups
+ * @property-read Collection|LogEntry[]         $logs
  * @property-read Collection|News[]             $news
  * @property-read Collection|NewsComment[]      $newsComments
  * @property-read Collection|OAuth[]            $oauth
@@ -52,6 +55,8 @@ use Illuminate\Support\Collection as SupportCollection;
  * @property-read Collection|AngelType[]        $userAngelTypes
  * @property-read UserAngelType                 $pivot
  * @property-read Collection|ShiftEntry[]       $shiftEntries
+ * @property-read Collection|ShiftEntry[]       $siftEntriesMarkedFreeloaded
+ * @property-read Collection|Session[]          $sessions
  * @property-read Collection|Worklog[]          $worklogs
  * @property-read Collection|Worklog[]          $worklogsCreated
  * @property-read Collection|Question[]         $questionsAsked
@@ -78,6 +83,11 @@ class User extends BaseModel
     /** @var bool enable timestamps */
     public $timestamps = true; // phpcs:ignore
 
+    /** @var array<string, null> default attributes */
+    protected $attributes = [ // phpcs:ignore
+        'last_login_at' => null,
+    ];
+
     /**
      * The attributes that are mass assignable.
      *
@@ -97,9 +107,9 @@ class User extends BaseModel
         'password',
     ];
 
-    /** @var array<string> The attributes that should be mutated to dates */
-    protected $dates = [ // phpcs:ignore
-        'last_login_at',
+    /** @var array<string, string> */
+    protected $casts = [ // phpcs:ignore
+        'last_login_at' => 'datetime',
     ];
 
     public function contact(): HasOne
@@ -117,9 +127,14 @@ class User extends BaseModel
     public function isFreeloader(): bool
     {
         return $this->shiftEntries()
-                ->where('freeloaded', true)
+                ->whereNotNull('freeloaded_by')
                 ->count()
             >= config('max_freeloadable_shifts');
+    }
+
+    public function siftEntriesMarkedFreeloaded(): HasMany
+    {
+        return $this->hasMany(ShiftEntry::class, 'freeloaded_by');
     }
 
     public function license(): HasOne
@@ -187,6 +202,11 @@ class User extends BaseModel
             ->exists();
     }
 
+    public function logs(): HasMany
+    {
+        return $this->hasMany(LogEntry::class);
+    }
+
     public function news(): HasMany
     {
         return $this->hasMany(News::class);
@@ -215,6 +235,11 @@ class User extends BaseModel
     public function worklogsCreated(): HasMany
     {
         return $this->hasMany(Worklog::class, 'creator_id');
+    }
+
+    public function sessions(): HasMany
+    {
+        return $this->hasMany(Session::class);
     }
 
     public function questionsAsked(): HasMany

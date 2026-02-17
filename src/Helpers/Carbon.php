@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Engelsystem\Helpers;
 
+use Carbon\CarbonInterval;
+
 class Carbon extends \Carbon\Carbon
 {
     public const DATETIME_LOCAL = '!Y-m-d\TH:i';
@@ -13,12 +15,13 @@ class Carbon extends \Carbon\Carbon
     public const DATETIME_FORMATS = [
         self::DATETIME_LOCAL,
         self::DATETIME_FALLBACK,
+        self::DEFAULT_TO_STRING_FORMAT,
     ];
 
     /**
      * Parses HTML datetime-local and ISO date/time strings.
      *
-     * @return \Carbon\Carbon|null Carbon if parseable, else null
+     * @return self|null Carbon if parseable, else null
      * @see self::DATETIME_FORMATS
      */
     public static function createFromDatetime(string $value): ?\Carbon\Carbon
@@ -33,14 +36,19 @@ class Carbon extends \Carbon\Carbon
     }
 
     /**
-     * Parses HTML datetime-local and ISO date/time strings.
+     * Formats a CarbonInterval into a human-readable duration string consisting of hours and minutes.
+     * Format is defined in the localization files under 'general.duration.format'.
      *
-     * @return int|null Timestamp if parseable, else null
-     * @see self::DATETIME_FORMATS
+     * @param CarbonInterval $interval The interval to format
+     * @param string $format The format string, e.g. '%dh %02dm'
+     * @return string The formatted duration string
      */
-    public static function createTimestampFromDatetime(string $value): ?int
+    public static function formatDuration(CarbonInterval $interval, string $format): string
     {
-        $carbon = self::createFromDateTime($value);
-        return $carbon === null ? null : $carbon->timestamp;
+        $interval->cascade();
+        $hours = floor($interval->totalHours);
+        $minutes = $interval->minutes;
+
+        return sprintf($format, $hours, $minutes);
     }
 }

@@ -1,19 +1,7 @@
 <?php
 
 use Engelsystem\Models\Question;
-use Engelsystem\Models\Room;
 use Engelsystem\UserHintsRenderer;
-
-/**
- * @param string $page
- * @param array  $parameters get parameters
- * @return string
- */
-function page_link_to($page = '', $parameters = [])
-{
-    $page = str_replace('_', '-', $page);
-    return url($page, $parameters);
-}
 
 /**
  * Render the user hints
@@ -35,9 +23,13 @@ function header_render_hints()
 
         // Important hints:
         $hints_renderer->addHint(render_user_freeloader_hint(), true);
-        $hints_renderer->addHint(render_user_arrived_hint(), true);
-        $hints_renderer->addHint(render_user_tshirt_hint(), true);
+        $hints_renderer->addHint(render_user_arrived_hint(true), true);
+        $hints_renderer->addHint(render_user_pronoun_hint(), true);
+        $hints_renderer->addHint(render_user_firstname_hint(), true);
+        $hints_renderer->addHint(render_user_lastname_hint(), true);
+        $hints_renderer->addHint(render_user_goodie_hint(), true);
         $hints_renderer->addHint(render_user_dect_hint(), true);
+        $hints_renderer->addHint(render_user_mobile_hint(), true);
 
         return $hints_renderer->render();
     }
@@ -45,129 +37,68 @@ function header_render_hints()
     return '';
 }
 
-/**
- * Returns the path of the current path with underscores instead of hyphens
- *
- * @return string
- */
-function current_page()
+function make_navigation(): array
 {
-    return request()->query->get('p') ?: str_replace('-', '_', request()->path());
-}
-
-/**
- * @return string
- */
-function make_navigation()
-{
-    $page = current_page();
     $menu = [];
     $pages = [
-        'news'           => __('News'),
-        'meetings'       => [__('Meetings'), 'user_meetings'],
-        'user_shifts'    => __('Shifts'),
-        'angeltypes'     => __('Angeltypes'),
-        'questions'      => [__('Ask the Heaven'), 'question.add'],
+        // path          => name,
+        // path          => [name, permission],
+        'news'           => 'news.title',
+        'meetings'       => ['news.title.meetings', 'user_meetings'],
+        'user_shifts'    => 'general.shifts',
+        'angeltypes'     => 'angeltypes.angeltypes',
+        'locations'      => ['location.locations', 'locations.view'],
+        'questions'      => ['question.menu', 'question.add'],
     ];
 
     foreach ($pages as $menu_page => $options) {
-        if (!menu_is_allowed($menu_page, $options)) {
-            continue;
-        }
-
-        $title = ((array) $options)[0];
-        $menu[] = toolbar_item_link(page_link_to($menu_page), '', $title, $menu_page == $page);
+        $options = (array) $options;
+        $menu[$options[0]] = [
+            url(str_replace('_', '-', $menu_page)),
+            $options[1] ?? $menu_page,
+        ];
     }
 
-    $menu = make_room_navigation($menu);
+    foreach (config('header_items', []) as $title => $options) {
+        $menu[$title] = $options;
+    }
 
-    $admin_menu = [];
     $admin_pages = [
-        // path              => name
-        // path              => [name, permission]
-        'admin_arrive'       => 'Arrive angels',
+        // path              => name,
+        // path              => [name, permission],
+        'admin_arrive'       => [admin_arrive_title(), 'users.arrive.list'],
         'admin_active'       => 'Active angels',
         'users'              => ['All Angels', 'admin_user'],
         'admin_free'         => 'Free angels',
         'admin/questions'    => ['Answer questions', 'question.edit'],
-        'shifttypes'         => 'Shifttypes',
+        'admin/shifttypes'   => ['shifttype.shifttypes', 'shifttypes.view'],
         'admin_shifts'       => 'Create shifts',
-        'admin/rooms'        => ['room.rooms', 'admin_rooms'],
-        'admin_groups'       => 'Grouprights',
+        'admin_groups'       => 'Group rights',
         'admin/schedule'     => ['schedule.import', 'schedule.import'],
+        'admin/tags'         => ['tag.tags', 'tag.edit'],
         'admin/logs'         => ['log.log', 'admin_log'],
-        'admin_event_config' => 'Event config',
+        'admin/config'       => ['config.config', 'config.edit'],
     ];
 
     if (config('autoarrive')) {
         unset($admin_pages['admin_arrive']);
     }
 
+    $admin_menu = [];
     foreach ($admin_pages as $menu_page => $options) {
-        if (!menu_is_allowed($menu_page, $options)) {
+        $options = (array) $options;
+        if (!auth()->can($options[1] ?? $menu_page)) {
             continue;
         }
 
-        $title = ((array) $options)[0];
-        $admin_menu[] = toolbar_dropdown_item(
-            page_link_to($menu_page),
-            __($title),
-            $menu_page == $page
-        );
+        $admin_menu[$options[0]] = [
+            url(str_replace('_', '-', $menu_page)),
+            $options[1] ?? $menu_page,
+        ];
     }
 
-    if (count($admin_menu) > 0) {
-        $menu[] = toolbar_dropdown(__('Admin'), $admin_menu);
-    }
+    $menu['Admin'] = [$admin_menu, $admin_menu ? null : 'hide', true];
 
-    return join("\n", $menu);
-}
-
-/**
- * @param string          $page
- * @param string|string[] $options
- *
- * @return bool
- */
-function menu_is_allowed(string $page, $options)
-{
-    $options = (array) $options;
-    $permissions = $page;
-
-    if (isset($options[1])) {
-        $permissions = $options[1];
-    }
-
-    return auth()->can($permissions);
-}
-
-/**
- * Adds room navigation to the given menu.
- *
- * @param string[] $menu Rendered menu
- * @return string[]
- */
-function make_room_navigation($menu)
-{
-    if (!auth()->can('view_rooms')) {
-        return $menu;
-    }
-
-    // Get a list of all rooms
-    $rooms = Room::orderBy('name')->get();
-    $room_menu = [];
-    if (auth()->can('admin_rooms')) {
-        $room_menu[] = toolbar_dropdown_item(page_link_to('admin/rooms'), __('Manage rooms'), false, 'list');
-    }
-    if (count($room_menu) > 0) {
-        $room_menu[] = toolbar_dropdown_item_divider();
-    }
-    foreach ($rooms as $room) {
-        $room_menu[] = toolbar_dropdown_item(room_link($room), $room->name, false, 'pin-map-fill');
-    }
-    if (count($room_menu) > 0) {
-        $menu[] = toolbar_dropdown(__('Rooms'), $room_menu);
-    }
     return $menu;
 }
 
@@ -182,8 +113,9 @@ function make_language_select()
     $activeLocale = session()->get('locale');
 
     $items = [];
-    foreach (config('locales') as $locale => $name) {
+    foreach (config('locales') as $locale) {
         $url = url($request->getPathInfo(), [...$request->getQueryParams(), 'set-locale' => $locale]);
+        $name = __('language.' . $locale);
 
         $items[] = toolbar_dropdown_item(
             htmlspecialchars($url),
@@ -201,7 +133,8 @@ function make_language_select()
  */
 function admin_new_questions()
 {
-    if (!auth()->can('question.edit') || current_page() == 'admin/questions') {
+    $currentPage = request()->query->get('p') ?: str_replace('-', '_', request()->path());
+    if (!auth()->can('question.edit') || $currentPage == 'admin/questions') {
         return null;
     }
 
@@ -210,7 +143,7 @@ function admin_new_questions()
         return null;
     }
 
-    return '<a href="' . page_link_to('/admin/questions') . '">'
+    return '<a href="' . url('/admin/questions') . '">'
         . __('There are unanswered questions!')
         . '</a>';
 }

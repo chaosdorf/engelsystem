@@ -41,18 +41,20 @@ ln -s ../../bin/pre-commit .git/hooks/pre-commit
 
 ## Docker
 
-We suggest using Docker for the Development local build.
+> [!TIP]
+> We suggest using Docker for the Development local build.  
+> This repo [ships a docker setup](docker/dev) for a quick development start.  
+> If you use another uid/gid than 1000 on your machine you have to adjust it in [docker/dev/.env](docker/dev/.env).
 
-If unspecific issues appear try using Docker version >= 20.10.14.
 
-This repo [ships a docker setup](docker/dev) for a quick development start.
-
-If you use another uid/gid than 1000 on your machine you have to adjust it in [docker/dev/.env](docker/dev/.env).
-
-Run this once
+Make sure you're in the `docker/dev` subfolder: 
 
 ```bash
 cd docker/dev
+```
+
+Then, run
+```bash
 docker compose up
 ```
 
@@ -72,7 +74,7 @@ docker compose exec es_workspace yarn build
 docker compose exec -e THEMES=0,1 es_workspace yarn build
 
 # Update the translation files
-docker compose exec es_workspace find /var/www/resources/lang -type f -name '*.po' -exec sh -c 'file="{}"; msgfmt "${file%.*}.po" -o "${file%.*}.mo"' \;
+docker compose exec es_workspace find /var/www/resources/lang -type f -name '*.po' -exec sh -c 'msgfmt "${1%.*}.po" -o"${1%.*}.mo"' shell {} \;
 
 # Run the migrations
 docker compose exec es_workspace bin/migrate
@@ -81,11 +83,20 @@ docker compose exec es_workspace bin/migrate
 While developing you may use the watch mode to rebuild the system on changes
 
 ```bash
-# Run a front-end build and update on change
+# Run a front-end build and update every time a JS or CSS file is changed (not translation files!)
 docker compose exec es_workspace yarn build:watch
 
-# Or run a front-end build and update on change for specific themes only, e.g.
+# Or build and update on change for specific themes only to save build time, e.g.
 docker compose exec -e THEMES=0,1 es_workspace yarn build:watch
+```
+
+> [!NOTE]
+> Wait some time (up to a few minutes) after running `yarn build:watch` – it may look like it's stalling, but it's not.
+
+
+It might also be useful to have an interactive database interface for which a phpMyAdmin instance can be startet at [http://localhost:8888](http://localhost:8888).
+```bash
+docker compose --profile dev up
 ```
 
 ## Localhost
@@ -118,7 +129,7 @@ The following instructions explain how to get, build and run the latest Engelsys
     ```
 * Generate translation files
   ```bash
-  find resources/lang/ -type f -name '*.po' -exec sh -c 'file="{}"; msgfmt "${file%.*}.po" -o "${file%.*}.mo"' \;
+  find resources/lang/ -type f -name '*.po' -exec sh -c 'msgfmt "${1%.*}.po" -o"${1%.*}.mo"' shell {} \;
   ```
 
 ## Testing
@@ -210,3 +221,19 @@ For some reason *PhpStorm* is unable to detect the server name.
 But without a server name it's impossible to set up path mappings.
 Because of that the docker setup sets the server name *engelsystem*.
 To get Xdebug working you have to create a server with the name *engelsystem* manually.
+
+## Troubleshooting
+
+### Docker version
+If unspecific issues appear try using Docker version >= 20.10.14.
+
+### `service "es_workspace" is not running`
+Make sure you're running your docker commands from the `docker/dev` directory, not from `docker`
+
+### `main` is broken after pulling the latest commits from upstream
+Try running
+```bash
+composer install
+```
+from this repository's root directory.
+If dependencies have been updated in `composer.json` since you last synced `main`, this should fix it.

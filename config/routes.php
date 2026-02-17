@@ -8,6 +8,8 @@ use FastRoute\RouteCollector;
 
 // Pages
 $route->get('/', 'HomeController@index');
+$route->get('/register', 'RegistrationController@view');
+$route->post('/register', 'RegistrationController@save');
 $route->get('/credits', 'CreditsController@index');
 $route->get('/health', 'HealthController@index');
 
@@ -38,9 +40,24 @@ $route->addGroup(
         $route->post('/theme', 'SettingsController@saveTheme');
         $route->get('/language', 'SettingsController@language');
         $route->post('/language', 'SettingsController@saveLanguage');
-        $route->get('/certificates', 'SettingsController@ifsgCertificate');
-        $route->post('/certificates', 'SettingsController@saveIfsgCertificate');
+        $route->get('/certificates', 'SettingsController@certificate');
+        $route->post('/certificates/ifsg', 'SettingsController@saveIfsgCertificate');
+        $route->post('/certificates/driving', 'SettingsController@saveDrivingLicense');
+        $route->get('/api', 'SettingsController@api');
+        $route->post('/api', 'SettingsController@apiKeyReset');
         $route->get('/oauth', 'SettingsController@oauth');
+        $route->get('/sessions', 'SettingsController@sessions');
+        $route->post('/sessions', 'SettingsController@sessionsDelete');
+    }
+);
+
+// User admin settings
+$route->addGroup(
+    '/users/{user_id:\d+}',
+    function (RouteCollector $route): void {
+            $route->get('/certificates', 'Admin\\UserSettingsController@certificate');
+            $route->post('/certificates/ifsg', 'Admin\\UserSettingsController@saveIfsgCertificate');
+            $route->post('/certificates/driving', 'Admin\\UserSettingsController@saveDrivingLicense');
     }
 );
 
@@ -55,13 +72,20 @@ $route->addGroup(
     }
 );
 
-// Stats
+// Metrics
 $route->get('/metrics', 'Metrics\\Controller@metrics');
-$route->get('/stats', 'Metrics\\Controller@stats');
 
 // Angeltypes
 $route->addGroup('/angeltypes', function (RouteCollector $route): void {
     $route->get('/about', 'AngelTypesController@about');
+    $route->get('/{angel_type_id:\d+}/qr', 'AngelTypesController@qrCode');
+    $route->post('/{angel_type_id:\d+}/qr', 'AngelTypesController@qrCode');
+    $route->get('/{angel_type_id:\d+}/join', 'AngelTypesController@join');
+});
+
+// Shifts
+$route->addGroup('/shifts', function (RouteCollector $route): void {
+    $route->get('/random', 'ShiftsController@random');
 });
 
 // News
@@ -78,6 +102,7 @@ $route->addGroup(
 
 // FAQ
 $route->get('/faq', 'FaqController@index');
+$route->get('/faq/tag/{tag_id:\d+}', 'FaqController@tagged');
 
 // Questions
 $route->addGroup(
@@ -103,7 +128,48 @@ $route->addGroup(
 );
 
 // API
-$route->get('/api[/{resource:.+}]', 'ApiController@index');
+$route->addGroup(
+    '/api',
+    function (RouteCollector $route): void {
+        $route->get('', 'Api\IndexController@index');
+
+        $route->addGroup(
+            '/v0-beta',
+            function (RouteCollector $route): void {
+                $route->addRoute(['OPTIONS'], '[/{resource:.+}]', 'Api\IndexController@options');
+                $route->get('', 'Api\IndexController@indexV0');
+                $route->get('/openapi', 'Api\IndexController@openApiV0');
+                $route->get('/info', 'Api\IndexController@info');
+
+                $route->get('/angeltypes', 'Api\AngelTypeController@index');
+                $route->get('/angeltypes/{angeltype_id:\d+}/shifts', 'Api\ShiftsController@entriesByAngeltype');
+                $route->get('/angeltypes/{angeltype_id:\d+}/users', 'Api\UsersController@entriesByAngeltype');
+
+                $route->get('/locations', 'Api\LocationsController@index');
+                $route->get('/locations/{location_id:\d+}/shifts', 'Api\ShiftsController@entriesByLocation');
+
+                $route->get('/news', 'Api\NewsController@index');
+
+                $route->get('/shifttypes', 'Api\ShiftTypeController@index');
+                $route->get('/shifttypes/{shifttype_id:\d+}/shifts', 'Api\ShiftsController@entriesByShiftType');
+
+                $route->get('/users', 'Api\UsersController@index');
+                $route->get('/users/{user_id:(?:\d+|self)}', 'Api\UsersController@user');
+                $route->get('/users/{user_id:(?:\d+|self)}/angeltypes', 'Api\AngelTypeController@ofUser');
+                $route->get('/users/{user_id:(?:\d+|self)}/shifts', 'Api\ShiftsController@entriesByUser');
+                $route->get('/users/{user_id:(?:\d+|self)}/worklogs', 'Api\UsersController@worklogs');
+
+                $route->addRoute(
+                    ['POST', 'PUT', 'DELETE', 'PATCH'],
+                    '/[{resource:.+}]',
+                    'Api\IndexController@notImplemented'
+                );
+                $route->get('/[{resource:.+}]', 'Api\IndexController@notFound');
+            }
+        );
+        $route->get('/[{resource:.+}]', 'Api\IndexController@notFound');
+    }
+);
 
 // Feeds
 $route->get('/atom', 'FeedController@atom');
@@ -118,6 +184,16 @@ $route->get('/design', 'DesignController@index');
 $route->addGroup(
     '/admin',
     function (RouteCollector $route): void {
+        // Config
+        $route->addGroup(
+            '/config',
+            function (RouteCollector $route): void {
+                $route->get('', 'Admin\\ConfigController@index');
+                $route->get('/{page}', 'Admin\\ConfigController@edit');
+                $route->post('/{page}', 'Admin\\ConfigController@save');
+            }
+        );
+
         // FAQ
         $route->addGroup(
             '/faq',
@@ -140,11 +216,42 @@ $route->addGroup(
         $route->addGroup(
             '/schedule',
             function (RouteCollector $route): void {
-                $route->get('', 'Admin\\Schedule\\ImportSchedule@index');
-                $route->get('/edit[/{schedule_id:\d+}]', 'Admin\\Schedule\\ImportSchedule@edit');
-                $route->post('/edit[/{schedule_id:\d+}]', 'Admin\\Schedule\\ImportSchedule@save');
-                $route->get('/load/{schedule_id:\d+}', 'Admin\\Schedule\\ImportSchedule@loadSchedule');
-                $route->post('/import/{schedule_id:\d+}', 'Admin\\Schedule\\ImportSchedule@importSchedule');
+                $route->get('', 'Admin\\ScheduleController@index');
+                $route->get('/edit[/{schedule_id:\d+}]', 'Admin\\ScheduleController@edit');
+                $route->post('/edit[/{schedule_id:\d+}]', 'Admin\\ScheduleController@save');
+                $route->get('/load/{schedule_id:\d+}', 'Admin\\ScheduleController@loadSchedule');
+                $route->post('/import/{schedule_id:\d+}', 'Admin\\ScheduleController@importSchedule');
+            }
+        );
+
+        // Shifts
+        $route->addGroup(
+            '/shifts',
+            function (RouteCollector $route): void {
+                $route->get('/history', 'Admin\\ShiftsController@history');
+                $route->post('/history', 'Admin\\ShiftsController@deleteTransaction');
+            }
+        );
+
+        // Shift types
+        $route->addGroup(
+            '/shifttypes',
+            function (RouteCollector $route): void {
+                $route->get('', 'Admin\\ShiftTypesController@index');
+                $route->post('', 'Admin\\ShiftTypesController@delete');
+                $route->get('/{shift_type_id:\d+}', 'Admin\\ShiftTypesController@view');
+                $route->get('/edit[/{shift_type_id:\d+}]', 'Admin\\ShiftTypesController@edit');
+                $route->post('/edit[/{shift_type_id:\d+}]', 'Admin\\ShiftTypesController@save');
+            }
+        );
+
+        // Tag
+        $route->addGroup(
+            '/tags',
+            function (RouteCollector $route): void {
+                $route->get('', 'Admin\\TagController@list');
+                $route->get('/edit[/{tag_id:\d+}]', 'Admin\\TagController@edit');
+                $route->post('/edit[/{tag_id:\d+}]', 'Admin\\TagController@save');
             }
         );
 
@@ -159,14 +266,13 @@ $route->addGroup(
             }
         );
 
-        // Rooms
+        // Locations
         $route->addGroup(
-            '/rooms',
+            '/locations',
             function (RouteCollector $route): void {
-                $route->get('', 'Admin\\RoomsController@index');
-                $route->post('', 'Admin\\RoomsController@delete');
-                $route->get('/edit[/{room_id:\d+}]', 'Admin\\RoomsController@edit');
-                $route->post('/edit[/{room_id:\d+}]', 'Admin\\RoomsController@save');
+                $route->post('', 'Admin\\LocationsController@delete');
+                $route->get('/edit[/{location_id:\d+}]', 'Admin\\LocationsController@edit');
+                $route->post('/edit[/{location_id:\d+}]', 'Admin\\LocationsController@save');
             }
         );
 
@@ -174,12 +280,12 @@ $route->addGroup(
         $route->addGroup(
             '/user/{user_id:\d+}',
             function (RouteCollector $route): void {
-                // Shirts
+                // Goodies
                 $route->addGroup(
                     '/goodie',
                     function (RouteCollector $route): void {
-                        $route->get('', 'Admin\\UserShirtController@editShirt');
-                        $route->post('', 'Admin\\UserShirtController@saveShirt');
+                        $route->get('', 'Admin\\UserGoodieController@editGoodie');
+                        $route->post('', 'Admin\\UserGoodieController@saveGoodie');
                     }
                 );
 
@@ -187,16 +293,25 @@ $route->addGroup(
                 $route->addGroup(
                     '/worklog',
                     function (RouteCollector $route): void {
-                        $route->get('[/{worklog_id:\d+}]', 'Admin\\UserWorkLogController@editWorklog');
-                        $route->post('[/{worklog_id:\d+}]', 'Admin\\UserWorkLogController@saveWorklog');
+                        $route->get('[/{worklog_id:\d+}]', 'Admin\\UserWorklogController@editWorklog');
+                        $route->post('[/{worklog_id:\d+}]', 'Admin\\UserWorklogController@saveWorklog');
                         $route->get(
                             '/{worklog_id:\d+}/delete',
-                            'Admin\\UserWorkLogController@showDeleteWorklog'
+                            'Admin\\UserWorklogController@showDeleteWorklog'
                         );
                         $route->post(
                             '/{worklog_id:\d+}/delete',
-                            'Admin\\UserWorkLogController@deleteWorklog'
+                            'Admin\\UserWorklogController@deleteWorklog'
                         );
+                    }
+                );
+
+                // Vouchers
+                $route->addGroup(
+                    '/voucher',
+                    function (RouteCollector $route): void {
+                        $route->get('', 'Admin\\UserVoucherController@editVoucher');
+                        $route->post('', 'Admin\\UserVoucherController@saveVoucher');
                     }
                 );
             }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Engelsystem\Http;
 
+use InvalidArgumentException;
 use Nyholm\Psr7\UploadedFile;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\UploadedFileInterface;
@@ -25,6 +26,8 @@ class Request extends SymfonyRequest implements ServerRequestInterface
 
     /**
      * Get input data
+     *
+     * @deprecated
      */
     public function input(string $key, mixed $default = null): mixed
     {
@@ -33,12 +36,36 @@ class Request extends SymfonyRequest implements ServerRequestInterface
 
     /**
      * Checks if the input exists
+     *
+     * @deprecated
      */
     public function has(string $key): bool
     {
         $value = $this->input($key);
 
         return !is_null($value);
+    }
+
+    /**
+     * Get input from any request part (attributes, GET or POST)
+     *
+     * @deprecated
+     */
+    public function get(string $key, mixed $default = null): mixed
+    {
+        if ($this !== $result = $this->attributes->get($key, $this)) {
+            return $result;
+        }
+
+        if ($this->query->has($key)) {
+            return $this->query->all()[$key];
+        }
+
+        if ($this->request->has($key)) {
+            return $this->request->all()[$key];
+        }
+
+        return $default;
     }
 
     /**
@@ -124,7 +151,7 @@ class Request extends SymfonyRequest implements ServerRequestInterface
      *
      * @param string $method Case-sensitive method.
      * @return static
-     * @throws \InvalidArgumentException for invalid HTTP methods.
+     * @throws InvalidArgumentException for invalid HTTP methods.
      */
     public function withMethod(mixed $method): static
     {
@@ -309,7 +336,7 @@ class Request extends SymfonyRequest implements ServerRequestInterface
      *
      * @param array $uploadedFiles An array tree of UploadedFileInterface instances.
      * @return static
-     * @throws \InvalidArgumentException if an invalid structure is provided.
+     * @throws InvalidArgumentException if an invalid structure is provided.
      */
     public function withUploadedFiles(array $uploadedFiles): static
     {
@@ -381,7 +408,7 @@ class Request extends SymfonyRequest implements ServerRequestInterface
      * @param null|array|object $data The deserialized body data. This will
      *                                typically be in an array or object.
      * @return static
-     * @throws \InvalidArgumentException if an unsupported argument type is
+     * @throws InvalidArgumentException if an unsupported argument type is
      *                                provided.
      */
     public function withParsedBody(mixed $data): static

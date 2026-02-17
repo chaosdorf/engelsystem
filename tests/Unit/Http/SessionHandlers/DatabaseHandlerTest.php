@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace Engelsystem\Test\Unit\Http\SessionHandlers;
 
 use Engelsystem\Config\Config;
+use Engelsystem\Helpers\Authenticator;
 use Engelsystem\Helpers\Carbon;
 use Engelsystem\Http\SessionHandlers\DatabaseHandler;
+use Engelsystem\Models\Session;
+use Engelsystem\Models\User\User;
 use Engelsystem\Test\Unit\HasDatabase;
 use Engelsystem\Test\Unit\TestCase;
+use Exception;
 
 class DatabaseHandlerTest extends TestCase
 {
@@ -16,7 +20,6 @@ class DatabaseHandlerTest extends TestCase
 
     /**
      * @covers \Engelsystem\Http\SessionHandlers\DatabaseHandler::__construct
-     * @covers \Engelsystem\Http\SessionHandlers\DatabaseHandler::getQuery
      * @covers \Engelsystem\Http\SessionHandlers\DatabaseHandler::read
      */
     public function testRead(): void
@@ -37,19 +40,57 @@ class DatabaseHandlerTest extends TestCase
      */
     public function testWrite(): void
     {
+        $user = User::factory()->create();
+        $auth = $this->createMock(Authenticator::class);
+        $auth->expects($this->exactly(2))
+            ->method('user')
+            ->willReturnOnConsecutiveCalls(null, $user);
+        $this->app->instance('authenticator', $auth);
+
         $handler = new DatabaseHandler($this->database);
 
+        $userExists = false;
         foreach (['Lorem Ipsum', 'Dolor Sit!'] as $data) {
             $this->assertTrue($handler->write('id-foo', $data));
 
-            $return = $this->database->getConnection()->table('sessions')
-                ->where('id', 'id-foo')
-                ->get();
+            $return = Session::whereId('id-foo')->get();
             $this->assertCount(1, $return);
 
-            $return = $return->first();
-            $this->assertEquals($data, $return->payload);
+            /** @var Session $session */
+            $session = $return->first();
+            $this->assertEquals($data, $session->payload);
+
+            if ($userExists) {
+                $this->assertNotNull($session->user);
+                $this->assertEquals($user->id, $session->user->id);
+            } else {
+                $this->assertNull($session->user);
+            }
+
+            $userExists = true;
         }
+    }
+
+    /**
+     * @covers \Engelsystem\Http\SessionHandlers\DatabaseHandler::write
+     */
+    public function testWriteIgnoreUserErrors(): void
+    {
+        $auth = $this->createMock(Authenticator::class);
+        $auth->expects($this->once())
+            ->method('user')
+            ->willReturnCallback(function (): void {
+                throw new Exception();
+            });
+        $this->app->instance('authenticator', $auth);
+
+        $handler = new DatabaseHandler($this->database);
+
+        $handler->write('id-foo', 'test');
+
+        /** @var Session $session */
+        $session = Session::whereId('id-foo')->first();
+        $this->assertNull($session->user_id);
     }
 
     /**

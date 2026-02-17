@@ -15,7 +15,7 @@ function ShiftEntry_onCreate(ShiftEntry $shiftEntry): void
         'User ' . User_Nick_render($shiftEntry->user, true)
         . ' signed up for shift ' . $shiftEntry->shift->title
         . ' (' . $shift->shiftType->name . ')'
-        . ' at ' . $shift->room->name
+        . ' at ' . $shift->location->name
         . ' from ' . $shift->start->format('Y-m-d H:i')
         . ' to ' . $shift->end->format('Y-m-d H:i')
         . ' as ' . $shiftEntry->angelType->name
@@ -28,19 +28,19 @@ function ShiftEntry_onCreate(ShiftEntry $shiftEntry): void
  *
  * @param ShiftEntry $shiftEntry
  */
-function ShiftEntry_onDelete(ShiftEntry $shiftEntry)
+function ShiftEntry_onDelete(ShiftEntry $shiftEntry): void
 {
     $signout_user = $shiftEntry->user;
     $shift = Shift($shiftEntry->shift);
     $shifttype = $shift->shiftType;
-    $room = $shift->room;
+    $location = $shift->location;
     $angeltype = $shiftEntry->angelType;
 
     engelsystem_log(
         'Shift signout: ' . User_Nick_render($signout_user, true)
         . ' from shift ' . $shift->title
         . ' (' . $shifttype->name . ')'
-        . ' at ' . $room->name
+        . ' at ' . $location->name
         . ' from ' . $shift->start->format('Y-m-d H:i')
         . ' to ' . $shift->end->format('Y-m-d H:i')
         . ' as ' . $angeltype->name
@@ -55,7 +55,7 @@ function ShiftEntry_onDelete(ShiftEntry $shiftEntry)
  * @param User $user
  * @return ShiftEntry[]|Collection
  */
-function ShiftEntries_upcoming_for_user(User $user)
+function ShiftEntries_upcoming_for_user(User $user): Collection
 {
     return $user->shiftEntries()
         ->with(['shift', 'shift.shiftType'])
@@ -72,13 +72,13 @@ function ShiftEntries_upcoming_for_user(User $user)
  * @param Carbon|null $sinceTime
  * @return ShiftEntry[]|Collection
  */
-function ShiftEntries_finished_by_user(User $user, Carbon $sinceTime = null)
+function ShiftEntries_finished_by_user(User $user, ?Carbon $sinceTime = null): Collection
 {
     $query = $user->shiftEntries()
         ->with(['shift', 'shift.shiftType'])
         ->join('shifts', 'shift_entries.shift_id', 'shifts.id')
         ->where('shifts.end', '<', Carbon::now())
-        ->where('freeloaded', false)
+        ->whereNull('freeloaded_by')
         ->orderByDesc('shifts.end');
 
     if ($sinceTime) {

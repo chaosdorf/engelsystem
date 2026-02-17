@@ -20,9 +20,9 @@ abstract class TestCase extends PHPUnitTestCase
     protected function setExpects(
         MockObject $object,
         string $method,
-        array $arguments = null,
+        ?array $arguments = null,
         mixed $return = null,
-        InvocationOrder|int $times = null
+        InvocationOrder|int|null $times = null
     ): void {
         if (is_null($times)) {
             $times = $this->once();
@@ -61,7 +61,7 @@ abstract class TestCase extends PHPUnitTestCase
     /**
      * @return Translator&MockObject
      */
-    protected function mockTranslator(bool $mockImplementation = true): Translator
+    protected function mockTranslator(bool|callable $mockImplementation = true): Translator
     {
         $translator = $this->getMockBuilder(Translator::class)
             ->disableOriginalConstructor()
@@ -70,7 +70,11 @@ abstract class TestCase extends PHPUnitTestCase
 
         if ($mockImplementation) {
             $translator->method('translate')
-                ->willReturnCallback(fn(string $key, array $replace = []) => $key);
+                ->willReturnCallback(
+                    is_callable($mockImplementation)
+                    ? $mockImplementation
+                    : fn(string $key, array $replace = []) => $key
+                );
         }
 
         $this->app->instance('translator', $translator);
